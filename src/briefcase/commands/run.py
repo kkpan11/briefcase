@@ -168,7 +168,7 @@ class RunAppMixin:
             )
 
             # Start streaming logs for the app.
-            self.logger.info("=" * 75)
+            self.console.info("=" * 75)
             with popen:
                 self.tools.subprocess.stream_output(
                     label="log stream" if log_stream else app.app_name,
@@ -181,14 +181,14 @@ class RunAppMixin:
             # check for the status of the test suite.
             if test_mode:
                 if log_filter.returncode == 0:
-                    self.logger.info("Test suite passed!", prefix=app.app_name)
+                    self.console.info("Test suite passed!", prefix=app.app_name)
                 else:
                     if log_filter.returncode is None:
                         raise BriefcaseCommandError(
                             "Test suite didn't report a result."
                         )
                     else:
-                        self.logger.error("Test suite failed!", prefix=app.app_name)
+                        self.console.error("Test suite failed!", prefix=app.app_name)
                         raise BriefcaseTestSuiteFailure()
             elif log_stream:
                 # If we're monitoring a log stream, and the log stream reported a
@@ -220,8 +220,8 @@ class RunCommand(RunAppMixin, BaseCommand):
         self._add_update_options(parser, context_label=" before running")
         self._add_test_options(parser, context_label="Run")
 
-    def _prepare_app_env(self, app: AppConfig, test_mode: bool):
-        """Prepare the environment for running an app as a log stream.
+    def _prepare_app_kwargs(self, app: AppConfig, test_mode: bool):
+        """Prepare the kwargs for running an app as a log stream.
 
         This won't be used by every backend; but it's a sufficiently common default that
         it's been factored out.
@@ -230,18 +230,26 @@ class RunCommand(RunAppMixin, BaseCommand):
         :param test_mode: Are we launching in test mode?
         :returns: A dictionary of additional arguments to pass to the Popen
         """
+        args = {}
+        env = {}
+
+        # If we're in debug mode, put BRIEFCASE_DEBUG into the environment
+        if self.console.is_debug:
+            env["BRIEFCASE_DEBUG"] = "1"
+
         if test_mode:
             # In test mode, set a BRIEFCASE_MAIN_MODULE environment variable
             # to override the module at startup
-            self.logger.info("Starting test_suite...", prefix=app.app_name)
-            return {
-                "env": {
-                    "BRIEFCASE_MAIN_MODULE": app.main_module(test_mode),
-                }
-            }
+            env["BRIEFCASE_MAIN_MODULE"] = app.main_module(test_mode)
+            self.console.info("Starting test_suite...", prefix=app.app_name)
         else:
-            self.logger.info("Starting app...", prefix=app.app_name)
-            return {}
+            self.console.info("Starting app...", prefix=app.app_name)
+
+        # If we need any environment variables, add them to the arguments.
+        if env:
+            args["env"] = env
+
+        return args
 
     @abstractmethod
     def run_app(self, app: AppConfig, **options) -> dict | None:
@@ -257,6 +265,7 @@ class RunCommand(RunAppMixin, BaseCommand):
         update_requirements: bool = False,
         update_resources: bool = False,
         update_support: bool = False,
+        update_stub: bool = False,
         no_update: bool = False,
         test_mode: bool = False,
         passthrough: list[str] | None = None,
@@ -284,14 +293,15 @@ class RunCommand(RunAppMixin, BaseCommand):
         self.finalize(app)
 
         template_file = self.bundle_path(app)
-        binary_file = self.binary_path(app)
+        exec_file = self.binary_executable_path(app)
         if (
             (not template_file.exists())  # App hasn't been created
             or update  # An explicit update has been requested
             or update_requirements  # An explicit update of requirements has been requested
             or update_resources  # An explicit update of resources has been requested
             or update_support  # An explicit update of support files has been requested
-            or (not binary_file.exists())  # Binary doesn't exist yet
+            or update_stub  # An explicit update of the stub binary has been requested
+            or (not exec_file.exists())  # Executable binary doesn't exist yet
             or (
                 test_mode and not no_update
             )  # Test mode, but updates have not been disabled
@@ -302,6 +312,7 @@ class RunCommand(RunAppMixin, BaseCommand):
                 update_requirements=update_requirements,
                 update_resources=update_resources,
                 update_support=update_support,
+                update_stub=update_stub,
                 no_update=no_update,
                 test_mode=test_mode,
                 **options,

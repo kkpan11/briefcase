@@ -3,9 +3,7 @@ import pytest
 from briefcase.commands import BuildCommand
 from briefcase.commands.base import full_options
 from briefcase.config import AppConfig
-from briefcase.console import Console, Log
-
-from ...utils import create_file
+from ...utils import create_file, DummyConsole
 
 
 class DummyBuildCommand(BuildCommand):
@@ -20,8 +18,7 @@ class DummyBuildCommand(BuildCommand):
     description = "Dummy build command"
 
     def __init__(self, *args, **kwargs):
-        kwargs.setdefault("logger", Log())
-        kwargs.setdefault("console", Console())
+        kwargs.setdefault("console", DummyConsole())
         super().__init__(*args, apps={}, **kwargs)
 
         self.actions = []
@@ -60,6 +57,7 @@ class DummyBuildCommand(BuildCommand):
         kwargs.pop("update_requirements", None)
         kwargs.pop("update_resources", None)
         kwargs.pop("update_support", None)
+        kwargs.pop("update_stub", None)
         kwargs.pop("no_update", None)
         kwargs.pop("test_mode", None)
         return full_options({"build_state": app.app_name}, kwargs)
@@ -79,6 +77,7 @@ class DummyBuildCommand(BuildCommand):
         kwargs.pop("update_requirements", None)
         kwargs.pop("update_resources", None)
         kwargs.pop("update_support", None)
+        kwargs.pop("update_stub", None)
         kwargs.pop("test_mode", None)
         return full_options({"update_state": app.app_name}, kwargs)
 
@@ -96,6 +95,7 @@ def second_app_config():
         version="0.0.2",
         description="The second simple app",
         sources=["src/second"],
+        license={"file": "LICENSE"},
     )
 
 

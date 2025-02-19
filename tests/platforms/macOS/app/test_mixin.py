@@ -1,6 +1,6 @@
 import pytest
 
-from briefcase.console import Console, Log
+from briefcase.console import Console
 from briefcase.exceptions import UnsupportedHostError
 from briefcase.platforms.macOS.app import macOSAppCreateCommand, macOSAppPackageCommand
 
@@ -8,7 +8,6 @@ from briefcase.platforms.macOS.app import macOSAppCreateCommand, macOSAppPackage
 @pytest.fixture
 def create_command(tmp_path):
     return macOSAppCreateCommand(
-        logger=Log(),
         console=Console(),
         base_path=tmp_path / "base_path",
         data_path=tmp_path / "briefcase",
@@ -18,7 +17,6 @@ def create_command(tmp_path):
 @pytest.fixture
 def package_command(tmp_path):
     return macOSAppPackageCommand(
-        logger=Log(),
         console=Console(),
         base_path=tmp_path / "base_path",
         data_path=tmp_path / "briefcase",
@@ -69,8 +67,8 @@ def test_project_path(create_command, first_app_config, tmp_path):
     assert expected_path == project_path
 
 
-def test_distribution_path_app(package_command, first_app_config, tmp_path):
-    first_app_config.packaging_format = "app"
+def test_distribution_path_zip(package_command, first_app_config, tmp_path):
+    first_app_config.packaging_format = "zip"
     distribution_path = package_command.distribution_path(first_app_config)
 
     expected_path = tmp_path / "base_path/dist/First App-0.0.1.app.zip"
@@ -82,4 +80,12 @@ def test_distribution_path_dmg(package_command, first_app_config, tmp_path):
     distribution_path = package_command.distribution_path(first_app_config)
 
     expected_path = tmp_path / "base_path/dist/First App-0.0.1.dmg"
+    assert distribution_path == expected_path
+
+
+def test_distribution_path_pkg(package_command, first_app_config, tmp_path):
+    first_app_config.packaging_format = "pkg"
+    distribution_path = package_command.distribution_path(first_app_config)
+
+    expected_path = tmp_path / "base_path/dist/First App-0.0.1.pkg"
     assert distribution_path == expected_path

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from abc import ABC
+from pathlib import Path
 from typing import Any, TypedDict
+
+from briefcase.console import Console
 
 
 class AppContext(TypedDict):
@@ -9,6 +12,8 @@ class AppContext(TypedDict):
     app_name: str
     class_name: str
     module_name: str
+    source_dir: str
+    test_source_dir: str
     project_name: str
     description: str
     author: str
@@ -16,9 +21,6 @@ class AppContext(TypedDict):
     bundle: str
     url: str
     license: str
-    briefcase_version: str
-    template_source: str
-    template_branch: str
 
 
 class BaseGuiBootstrap(ABC):
@@ -52,15 +54,20 @@ class BaseGuiBootstrap(ABC):
     # is presented with the options to create a new project.
     display_name_annotation: str = ""
 
-    def __init__(self, context: AppContext):
+    def __init__(self, console: Console, context: AppContext):
+        self.console = console
+
         # context contains metadata about the app being created
         self.context = context
 
-    def extra_context(self) -> dict[str, Any] | None:
+    def extra_context(self, project_overrides: dict[str, str]) -> dict[str, Any] | None:
         """Runs prior to other plugin hooks to provide additional context.
 
         This can be used to prompt the user with additional questions or run arbitrary
         logic to supplement the context provided to cookiecutter.
+
+        :param project_overrides: Any overrides provided by the user as -Q options that
+            haven't been consumed by the standard bootstrap wizard questions.
         """
 
     def app_source(self) -> str | None:
@@ -113,3 +120,12 @@ class BaseGuiBootstrap(ABC):
 
     def pyproject_extra_content(self) -> str | None:
         """Additional TOML to add to the bottom of pyproject.toml."""
+
+    def post_generate(self, base_path: Path) -> None:
+        """Runs after the template has been generated.
+
+        This can be used to produce any additional files that the base
+        template doesn't provide.
+
+        :param base_path: The path to the root of the generated project.
+        """

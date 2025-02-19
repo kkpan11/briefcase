@@ -4,10 +4,10 @@ import sys
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, List
+from typing import Any
 from zipfile import ZipFile
 
-from briefcase.console import Log
+from briefcase.console import Console
 
 if sys.version_info >= (3, 11):  # pragma: no-cover-if-lt-py311
     import tomllib
@@ -32,6 +32,7 @@ from briefcase.exceptions import BriefcaseCommandError, BriefcaseConfigError
 class StaticWebMixin:
     output_format = "static"
     platform = "web"
+    platform_target_version = "0.3.21"
 
     def project_path(self, app):
         return self.bundle_path(app) / "www"
@@ -108,7 +109,7 @@ class StaticWebBuildCommand(StaticWebMixin, BuildCommand):
                     and path.parts[1] == "static"
                     and path.suffix == ".css"
                 ):
-                    self.logger.info(f"    Found {filename}")
+                    self.console.info(f"    Found {filename}")
                     css_file.write(
                         "\n/*******************************************************\n"
                     )
@@ -123,15 +124,15 @@ class StaticWebBuildCommand(StaticWebMixin, BuildCommand):
 
         :param app: The application to build
         """
-        self.logger.info("Building web project...", prefix=app.app_name)
+        self.console.info("Building web project...", prefix=app.app_name)
 
         if self.wheel_path(app).exists():
-            with self.input.wait_bar("Removing old wheels..."):
+            with self.console.wait_bar("Removing old wheels..."):
                 self.tools.shutil.rmtree(self.wheel_path(app))
 
         self.wheel_path(app).mkdir(parents=True)
 
-        with self.input.wait_bar("Building app wheel..."):
+        with self.console.wait_bar("Building app wheel..."):
             try:
                 self.tools.subprocess.run(
                     [
@@ -154,7 +155,7 @@ class StaticWebBuildCommand(StaticWebMixin, BuildCommand):
                     f"Unable to build wheel for app {app.app_name!r}"
                 ) from e
 
-        with self.input.wait_bar("Installing wheels for requirements..."):
+        with self.console.wait_bar("Installing wheels for requirements..."):
             try:
                 self.tools.subprocess.run(
                     [
@@ -169,7 +170,8 @@ class StaticWebBuildCommand(StaticWebMixin, BuildCommand):
                         self.wheel_path(app),
                         "-r",
                         self.bundle_path(app) / "requirements.txt",
-                    ],
+                    ]
+                    + (["-vv"] if self.console.is_deep_debug else []),
                     check=True,
                     encoding="UTF-8",
                 )
@@ -178,38 +180,45 @@ class StaticWebBuildCommand(StaticWebMixin, BuildCommand):
                     f"Unable to install requirements for app {app.app_name!r}"
                 ) from e
 
-        with self.input.wait_bar("Writing Pyscript configuration file..."):
-            with (self.project_path(app) / "pyscript.toml").open("wb") as f:
-                config = {
-                    "name": app.formal_name,
-                    "description": app.description,
-                    "version": app.version,
-                    "splashscreen": {"autoclose": True},
-                    "terminal": False,
-                    # Ensure that we're using Unix path separators, as the content
-                    # will be parsed by pyscript in the browser.
-                    "packages": [
-                        f'/{"/".join(wheel.relative_to(self.project_path(app)).parts)}'
-                        for wheel in sorted(self.wheel_path(app).glob("*.whl"))
-                    ],
-                }
-                # Parse any additional pyscript.toml content, and merge it into
-                # the overall content
-                try:
-                    extra = tomllib.loads(app.extra_pyscript_toml_content)
-                    config.update(extra)
-                except tomllib.TOMLDecodeError as e:
-                    raise BriefcaseConfigError(
-                        f"Extra pyscript.toml content isn't valid TOML: {e}"
-                    ) from e
-                except AttributeError:
-                    pass
+        with self.console.wait_bar("Writing Pyscript configuration file..."):
+            # Load any pre-existing pyscript.toml provided by the template. If the file
+            # doesn't exist, assume an empty pyscript.toml as a starting point.
+            try:
+                with (self.project_path(app) / "pyscript.toml").open("rb") as f:
+                    config = tomllib.load(f)
+            except tomllib.TOMLDecodeError as e:
+                raise BriefcaseConfigError(
+                    f"pyscript.toml content isn't valid TOML: {e}"
+                ) from e
+            except FileNotFoundError:
+                config = {}
 
-                # Write the final configuration.
+            # Add the packages declaration to the existing pyscript.toml.
+            # Ensure that we're using Unix path separators, as the content
+            # will be parsed by pyscript in the browser.
+            config["packages"] = [
+                f'/{"/".join(wheel.relative_to(self.project_path(app)).parts)}'
+                for wheel in sorted(self.wheel_path(app).glob("*.whl"))
+            ]
+
+            # Parse any additional pyscript.toml content, and merge it into
+            # the overall content
+            try:
+                extra = tomllib.loads(app.extra_pyscript_toml_content)
+                config.update(extra)
+            except tomllib.TOMLDecodeError as e:
+                raise BriefcaseConfigError(
+                    f"Extra pyscript.toml content isn't valid TOML: {e}"
+                ) from e
+            except AttributeError:
+                pass
+
+            # Write the final configuration.
+            with (self.project_path(app) / "pyscript.toml").open("wb") as f:
                 tomli_w.dump(config, f)
 
-        self.logger.info("Compile static web content from wheels")
-        with self.input.wait_bar("Compiling static web content from wheels..."):
+        self.console.info("Compile static web content from wheels")
+        with self.console.wait_bar("Compiling static web content from wheels..."):
             # Trim previously compiled content out of briefcase.css
             briefcase_css_path = self.project_path(app) / "static/css/briefcase.css"
             self._trim_file(
@@ -219,7 +228,7 @@ class StaticWebBuildCommand(StaticWebMixin, BuildCommand):
 
             # Extract static resources from packaged wheels
             for wheelfile in sorted(self.wheel_path(app).glob("*.whl")):
-                self.logger.info(f"  Processing {wheelfile.name}...")
+                self.console.info(f"  Processing {wheelfile.name}...")
                 with briefcase_css_path.open("a", encoding="utf-8") as css_file:
                     self._process_wheel(wheelfile, css_file=css_file)
 
@@ -258,7 +267,13 @@ class LocalHTTPServer(ThreadingHTTPServer):
     """An HTTP server that serves local static content."""
 
     def __init__(
-        self, base_path, host, port, RequestHandlerClass=HTTPHandler, *, logger: Log
+        self,
+        base_path,
+        host,
+        port,
+        RequestHandlerClass=HTTPHandler,
+        *,
+        logger: Console,
     ):
         self.base_path = base_path
         self.logger = logger
@@ -296,7 +311,7 @@ class StaticWebRunCommand(StaticWebMixin, RunCommand):
         self,
         app: AppConfig,
         test_mode: bool,
-        passthrough: List[str],
+        passthrough: list[str],
         host,
         port,
         open_browser,
@@ -314,11 +329,11 @@ class StaticWebRunCommand(StaticWebMixin, RunCommand):
         if test_mode:
             raise BriefcaseCommandError("Briefcase can't run web apps in test mode.")
 
-        self.logger.info("Starting web server...", prefix=app.app_name)
+        self.console.info("Starting web server...", prefix=app.app_name)
 
         # At least for now, there's no easy way to pass arguments to a web app.
         if passthrough:
-            self.logger.warning(f"Ignoring passthrough arguments: {passthrough}")
+            self.console.warning(f"Ignoring passthrough arguments: {passthrough}")
 
         httpd = None
         try:
@@ -328,11 +343,11 @@ class StaticWebRunCommand(StaticWebMixin, RunCommand):
                     self.project_path(app),
                     host=host,
                     port=port,
-                    logger=self.logger,
+                    logger=self.console,
                 )
             except OSError as e:
                 if e.errno in (errno.EADDRINUSE, errno.ENOSR):
-                    self.logger.warning(
+                    self.console.warning(
                         f"Using a system-allocated port since port {port} is already in use. "
                         "Use -p/--port to manually specify a port."
                     )
@@ -340,7 +355,7 @@ class StaticWebRunCommand(StaticWebMixin, RunCommand):
                         self.project_path(app),
                         host=host,
                         port=0,
-                        logger=self.logger,
+                        logger=self.console,
                     )
                 else:
                     raise
@@ -350,16 +365,16 @@ class StaticWebRunCommand(StaticWebMixin, RunCommand):
             host, port = httpd.socket.getsockname()
             url = f"http://{host}:{port}"
 
-            self.logger.info(f"Web server open on {url}")
+            self.console.info(f"Web server open on {url}")
             # If requested, open a browser tab on the newly opened server.
             if open_browser:
                 webbrowser.open_new_tab(url)
 
-            self.logger.info(
+            self.console.info(
                 "Web server log output (type CTRL-C to stop log)...",
                 prefix=app.app_name,
             )
-            self.logger.info("=" * 75)
+            self.console.info("=" * 75)
 
             # Run the server.
             httpd.serve_forever()
@@ -388,7 +403,7 @@ class StaticWebRunCommand(StaticWebMixin, RunCommand):
             httpd.shutdown()
         finally:
             if httpd:
-                with self.input.wait_bar("Shutting down server..."):
+                with self.console.wait_bar("Shutting down server..."):
                     httpd.server_close()
 
             # Not sure why, but this is needed to mollify coverage for the
@@ -415,12 +430,12 @@ class StaticWebPackageCommand(StaticWebMixin, PackageCommand):
 
         :param app: The app to package.
         """
-        self.logger.info(
+        self.console.info(
             "Packaging web app for distribution...",
             prefix=app.app_name,
         )
 
-        with self.input.wait_bar("Building archive..."):
+        with self.console.wait_bar("Building archive..."):
             self.tools.shutil.make_archive(
                 self.distribution_path(app).with_suffix(""),
                 format="zip",

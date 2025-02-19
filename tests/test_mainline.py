@@ -6,7 +6,7 @@ import pytest
 from briefcase.__main__ import main
 from briefcase.commands.create import CreateCommand
 from briefcase.commands.run import RunCommand
-from briefcase.console import Log
+from briefcase.console import Console
 from briefcase.exceptions import BriefcaseTestSuiteFailure, BriefcaseWarning
 
 from .utils import create_file
@@ -27,6 +27,7 @@ requires = ["briefcase"]
 project_name = "Hello World"
 bundle = "com.example"
 version = "0.0.1"
+license.file = "LICENSE"
 
 [tool.briefcase.app.myapp]
 description = "My first application"
@@ -50,7 +51,7 @@ def test_help(monkeypatch, tmp_path, capsys):
     )
 
     # No log file was written
-    assert len(list(tmp_path.glob(f"{Log.LOG_DIR}/briefcase.*.log"))) == 0
+    assert len(list(tmp_path.glob(f"{Console.LOG_DIR}/briefcase.*.log"))) == 0
 
 
 def test_command(monkeypatch, tmp_path, capsys):
@@ -78,7 +79,7 @@ def test_command(monkeypatch, tmp_path, capsys):
     )
 
     # No log file was written
-    assert len(list(tmp_path.glob(f"{Log.LOG_DIR}/briefcase.*.log"))) == 0
+    assert len(list(tmp_path.glob(f"{Console.LOG_DIR}/briefcase.*.log"))) == 0
 
 
 def test_command_warning(monkeypatch, pyproject_toml, tmp_path, capsys):
@@ -105,7 +106,7 @@ def test_command_warning(monkeypatch, pyproject_toml, tmp_path, capsys):
     assert output.endswith("\nThis is bad, but not *really* bad\n")
 
     # Log files are not created for BriefcaseWarnings
-    assert len(list(tmp_path.glob(f"{Log.LOG_DIR}/briefcase.*.create.log"))) == 0
+    assert len(list(tmp_path.glob(f"{Console.LOG_DIR}/briefcase.*.create.log"))) == 0
 
 
 def test_command_error(monkeypatch, tmp_path, capsys):
@@ -125,7 +126,7 @@ def test_command_error(monkeypatch, tmp_path, capsys):
     )
 
     # Log files are not created for BriefcaseConfigError errors
-    assert len(list(tmp_path.glob(f"{Log.LOG_DIR}/briefcase.*.create.log"))) == 0
+    assert len(list(tmp_path.glob(f"{Console.LOG_DIR}/briefcase.*.create.log"))) == 0
 
 
 def test_unknown_command_error(monkeypatch, pyproject_toml, capsys):
@@ -164,7 +165,7 @@ def test_interrupted_command(monkeypatch, pyproject_toml, tmp_path, capsys):
     assert "\nAborted by user.\n" in output
 
     # No log file was written
-    assert len(list(tmp_path.glob(f"{Log.LOG_DIR}/briefcase.*.create.log"))) == 0
+    assert len(list(tmp_path.glob(f"{Console.LOG_DIR}/briefcase.*.create.log"))) == 0
 
 
 def test_interrupted_command_with_log(monkeypatch, pyproject_toml, tmp_path, capsys):
@@ -186,7 +187,7 @@ def test_interrupted_command_with_log(monkeypatch, pyproject_toml, tmp_path, cap
     assert "\nAborted by user.\n" in output
 
     # A log file was written
-    assert len(list(tmp_path.glob(f"{Log.LOG_DIR}/briefcase.*.create.log"))) == 1
+    assert len(list(tmp_path.glob(f"{Console.LOG_DIR}/briefcase.*.create.log"))) == 1
 
 
 def test_test_failure(monkeypatch, pyproject_toml, tmp_path, capsys):
@@ -207,4 +208,4 @@ def test_test_failure(monkeypatch, pyproject_toml, tmp_path, capsys):
     assert output == ""
 
     # Log files are not created for BriefcaseTestSuiteFailures
-    assert len(list(tmp_path.glob(f"{Log.LOG_DIR}/briefcase.*.create.log"))) == 0
+    assert len(list(tmp_path.glob(f"{Console.LOG_DIR}/briefcase.*.create.log"))) == 0

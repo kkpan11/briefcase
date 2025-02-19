@@ -7,9 +7,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from briefcase.config import AppConfig
-from briefcase.console import Log
 from briefcase.integrations.base import ToolCache
-from briefcase.integrations.download import Download
+from briefcase.integrations.file import File
 from briefcase.integrations.subprocess import Subprocess
 from tests.utils import DummyConsole
 
@@ -17,7 +16,6 @@ from tests.utils import DummyConsole
 @pytest.fixture
 def mock_tools(tmp_path) -> ToolCache:
     mock_tools = ToolCache(
-        logger=Log(),
         console=DummyConsole(),
         base_path=tmp_path / "tools",
         home_path=tmp_path / "home",
@@ -36,8 +34,8 @@ def mock_tools(tmp_path) -> ToolCache:
     mock_tools.base_path.mkdir(parents=True)
     mock_tools.home_path.mkdir(parents=True)
 
-    # Make Download and Subprocess always available
-    Download.verify(tools=mock_tools)
+    # Make File and Subprocess always available
+    File.verify(tools=mock_tools)
     Subprocess.verify(tools=mock_tools)
 
     return mock_tools
@@ -54,4 +52,5 @@ def first_app_config():
         version="0.0.1",
         description="The first simple app",
         sources=["src/first_app"],
+        license={"file": "LICENSE"},
     )

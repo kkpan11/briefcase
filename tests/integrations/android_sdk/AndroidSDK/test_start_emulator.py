@@ -1,4 +1,3 @@
-import os
 import subprocess
 from unittest.mock import MagicMock, call
 
@@ -109,7 +108,7 @@ def test_start_emulator(mock_tools, android_sdk):
     # The process was started.
     mock_tools.subprocess.Popen.assert_called_with(
         [
-            os.fsdecode(android_sdk.emulator_path),
+            android_sdk.emulator_path,
             "@idleEmulator",
             "-dns-server",
             "8.8.8.8",
@@ -121,13 +120,19 @@ def test_start_emulator(mock_tools, android_sdk):
         start_new_session=True,
     )
 
+    mock_tools.subprocess.stream_output_non_blocking.assert_called_with(
+        label="Android emulator",
+        popen_process=emu_popen,
+        capture_output=True,
+    )
+
     # There were 5 calls to run
     android_sdk.mock_run.assert_has_calls(
         [
             # Three calls to get avd name
-            call("emu", "avd", "name"),
-            call("emu", "avd", "name"),
-            call("emu", "avd", "name"),
+            call("emu", "avd", "name", quiet=1),
+            call("emu", "avd", "name", quiet=1),
+            call("emu", "avd", "name", quiet=1),
             # 2 calls to get boot property
             call("shell", "getprop", "sys.boot_completed"),
             call("shell", "getprop", "sys.boot_completed"),
@@ -190,7 +195,7 @@ def test_start_emulator_fast_start(mock_tools, android_sdk):
     # The process was started.
     mock_tools.subprocess.Popen.assert_called_with(
         [
-            os.fsdecode(android_sdk.emulator_path),
+            android_sdk.emulator_path,
             "@idleEmulator",
             "-dns-server",
             "8.8.8.8",
@@ -202,12 +207,18 @@ def test_start_emulator_fast_start(mock_tools, android_sdk):
         start_new_session=True,
     )
 
+    mock_tools.subprocess.stream_output_non_blocking.assert_called_with(
+        label="Android emulator",
+        popen_process=emu_popen,
+        capture_output=True,
+    )
+
     # There were 3 calls to run
     android_sdk.mock_run.assert_has_calls(
         [
             # 2 calls to get avd name
-            call("emu", "avd", "name"),
-            call("emu", "avd", "name"),
+            call("emu", "avd", "name", quiet=1),
+            call("emu", "avd", "name", quiet=1),
             # 1 calls to get boot property
             call("shell", "getprop", "sys.boot_completed"),
         ]
@@ -285,7 +296,7 @@ def test_emulator_fail_to_start(mock_tools, android_sdk):
     # The process was started.
     mock_tools.subprocess.Popen.assert_called_with(
         [
-            os.fsdecode(android_sdk.emulator_path),
+            android_sdk.emulator_path,
             "@idleEmulator",
             "-dns-server",
             "8.8.8.8",
@@ -297,11 +308,17 @@ def test_emulator_fail_to_start(mock_tools, android_sdk):
         start_new_session=True,
     )
 
+    mock_tools.subprocess.stream_output_non_blocking.assert_called_with(
+        label="Android emulator",
+        popen_process=emu_popen,
+        capture_output=True,
+    )
+
     # There were 2 calls to run, both to get AVD name
     android_sdk.mock_run.assert_has_calls(
         [
-            call("emu", "avd", "name"),
-            call("emu", "avd", "name"),
+            call("emu", "avd", "name", quiet=1),
+            call("emu", "avd", "name", quiet=1),
         ]
     )
 
@@ -389,7 +406,7 @@ def test_emulator_fail_to_boot(mock_tools, android_sdk):
     # The process was started.
     mock_tools.subprocess.Popen.assert_called_with(
         [
-            os.fsdecode(android_sdk.emulator_path),
+            android_sdk.emulator_path,
             "@idleEmulator",
             "-dns-server",
             "8.8.8.8",
@@ -401,13 +418,19 @@ def test_emulator_fail_to_boot(mock_tools, android_sdk):
         start_new_session=True,
     )
 
+    mock_tools.subprocess.stream_output_non_blocking.assert_called_with(
+        label="Android emulator",
+        popen_process=emu_popen,
+        capture_output=True,
+    )
+
     # There were 6 calls to run before failure
     android_sdk.mock_run.assert_has_calls(
         [
             # 3 calls to get avd name
-            call("emu", "avd", "name"),
-            call("emu", "avd", "name"),
-            call("emu", "avd", "name"),
+            call("emu", "avd", "name", quiet=1),
+            call("emu", "avd", "name", quiet=1),
+            call("emu", "avd", "name", quiet=1),
             # 3 calls to get boot property (since boot fails
             # before last/fourth one would return success)
             call("shell", "getprop", "sys.boot_completed"),
@@ -423,20 +446,7 @@ def test_emulator_fail_to_boot(mock_tools, android_sdk):
     assert "Android emulator was unable to boot!" in exc_info.value.msg
 
 
-@pytest.mark.parametrize(
-    "emulator_comm, expected_log",
-    [
-        (
-            ("This is stdout", "this is stderr"),
-            "Emulator output log for startup failure\nThis is stdout",
-        ),
-        (
-            subprocess.TimeoutExpired(cmd="emulator", timeout=1),
-            "Emulator output log for startup failure\nBriefcase failed",
-        ),
-    ],
-)
-def test_emulator_ctrl_c(mock_tools, android_sdk, emulator_comm, expected_log, capsys):
+def test_emulator_ctrl_c(mock_tools, android_sdk, capsys):
     """If emulator startup is interrupted by the user, an error is displayed."""
     # Short circuit device loop by returning no devices
     android_sdk.devices = MagicMock(side_effect=[{}, {}])
@@ -449,7 +459,11 @@ def test_emulator_ctrl_c(mock_tools, android_sdk, emulator_comm, expected_log, c
     mock_tools.subprocess.Popen.return_value = emu_popen
 
     # Mock emulator output
-    emu_popen.communicate.side_effect = [emulator_comm]
+    emu_streamer = MagicMock()
+    mock_tools.subprocess.stream_output_non_blocking = MagicMock(
+        return_value=emu_streamer
+    )
+    emu_streamer.captured_output = "This is stdout"
 
     # Start the emulator
     with pytest.raises(KeyboardInterrupt):
@@ -458,7 +472,7 @@ def test_emulator_ctrl_c(mock_tools, android_sdk, emulator_comm, expected_log, c
     # The process was started.
     mock_tools.subprocess.Popen.assert_called_with(
         [
-            os.fsdecode(android_sdk.emulator_path),
+            android_sdk.emulator_path,
             "@idleEmulator",
             "-dns-server",
             "8.8.8.8",
@@ -470,13 +484,19 @@ def test_emulator_ctrl_c(mock_tools, android_sdk, emulator_comm, expected_log, c
         start_new_session=True,
     )
 
+    mock_tools.subprocess.stream_output_non_blocking.assert_called_with(
+        label="Android emulator",
+        popen_process=emu_popen,
+        capture_output=True,
+    )
+
     # Took a total of 2 naps before KeyboardInterrupt.
     assert android_sdk.sleep.call_count == 2
 
     output = capsys.readouterr().out
 
     # Emulator's log was printed.
-    assert expected_log in output
+    assert "Emulator output log for startup failure\nThis is stdout" in output
 
     # Expected error message was printed.
     assert "Is the Android emulator not starting up properly?" in output
@@ -524,7 +544,7 @@ def test_start_emulator_extra_args(mock_tools, android_sdk):
     # The process was started with the headless test options.
     mock_tools.subprocess.Popen.assert_called_with(
         [
-            os.fsdecode(android_sdk.emulator_path),
+            android_sdk.emulator_path,
             "@idleEmulator",
             "-dns-server",
             "8.8.8.8",
@@ -538,11 +558,17 @@ def test_start_emulator_extra_args(mock_tools, android_sdk):
         start_new_session=True,
     )
 
+    mock_tools.subprocess.stream_output_non_blocking.assert_called_with(
+        label="Android emulator",
+        popen_process=emu_popen,
+        capture_output=True,
+    )
+
     # There were 2 calls to run
     android_sdk.mock_run.assert_has_calls(
         [
             # 1 call to get avd name
-            call("emu", "avd", "name"),
+            call("emu", "avd", "name", quiet=1),
             # 1 calls to get boot property
             call("shell", "getprop", "sys.boot_completed"),
         ]

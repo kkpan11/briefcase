@@ -7,7 +7,7 @@ from unittest import mock
 
 import pytest
 
-from briefcase.console import Console, Log
+from briefcase.console import Console
 from briefcase.integrations.subprocess import Subprocess
 from briefcase.integrations.wix import WiX
 from briefcase.platforms.windows.visualstudio import WindowsVisualStudioPackageCommand
@@ -16,7 +16,6 @@ from briefcase.platforms.windows.visualstudio import WindowsVisualStudioPackageC
 @pytest.fixture
 def package_command(tmp_path):
     command = WindowsVisualStudioPackageCommand(
-        logger=Log(),
         console=Console(),
         base_path=tmp_path / "base_path",
         data_path=tmp_path / "briefcase",
@@ -38,7 +37,7 @@ def test_package_msi(package_command, first_app_config, tmp_path):
                 [
                     tmp_path / "wix/bin/heat.exe",
                     "dir",
-                    os.fsdecode(Path("x64/Release")),
+                    Path("x64/Release"),
                     "-nologo",
                     "-gg",
                     "-sfrag",

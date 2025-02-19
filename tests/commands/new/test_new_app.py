@@ -6,18 +6,23 @@ from cookiecutter import exceptions as cookiecutter_exceptions
 from cookiecutter.main import cookiecutter
 
 import briefcase
+from briefcase.bootstraps import BaseGuiBootstrap
 from briefcase.commands import NewCommand
-from briefcase.console import Console, Log
+from briefcase.console import Console
 from briefcase.exceptions import (
     BriefcaseCommandError,
+    InvalidTemplateBranch,
     InvalidTemplateRepository,
-    TemplateUnsupportedVersion,
 )
 
 
 @pytest.fixture
 def new_command(tmp_path):
-    return NewCommand(base_path=tmp_path, logger=Log(), console=Console())
+    return NewCommand(
+        base_path=tmp_path / "base",
+        data_path=tmp_path / "data",
+        console=Console(),
+    )
 
 
 @pytest.mark.parametrize(
@@ -47,6 +52,9 @@ def test_new_app(
         "app_name": "myapplication",
     }
     new_command.build_app_context = mock.MagicMock(return_value=app_context)
+    bootstrap = BaseGuiBootstrap(new_command.console, {})
+    bootstrap.post_generate = mock.MagicMock()
+    new_command.create_bootstrap = mock.MagicMock(return_value=bootstrap)
     new_command.build_gui_context = mock.MagicMock(
         return_value={
             "app_source": "main()",
@@ -58,12 +66,14 @@ def test_new_app(
     )
     new_command.tools.cookiecutter = mock.MagicMock(spec_set=cookiecutter)
 
-    # Create the new app, using the default template.
-    new_command.new_app()
+    # Create the new app, using the default template and no project overrides
+    new_command.new_app(project_overrides={})
 
     # App context is constructed
-    new_command.build_app_context.assert_called_once_with(None)
-    new_command.build_gui_context.assert_called_once_with(app_context, None)
+    new_command.build_app_context.assert_called_once_with({})
+    new_command.create_bootstrap.assert_called_once_with(app_context, {})
+    new_command.build_gui_context.assert_called_once_with(bootstrap, {})
+
     # Template is updated
     new_command.update_cookiecutter_cache.assert_called_once_with(
         template="https://github.com/beeware/briefcase-template",
@@ -73,7 +83,7 @@ def test_new_app(
     new_command.tools.cookiecutter.assert_called_once_with(
         "~/.cookiecutters/briefcase-template",
         no_input=True,
-        output_dir=os.fsdecode(tmp_path),
+        output_dir=os.fsdecode(tmp_path / "base"),
         checkout=expected_branch,
         extra_context={
             "formal_name": "My Application",
@@ -88,6 +98,12 @@ def test_new_app(
             "app_source": "main()",
             "pyproject_requires": "toga",
         },
+        default_config={"replay_dir": str(tmp_path / "data/templates/.replay")},
+    )
+
+    # Bootstrap post-generate step is invoked with correct path
+    bootstrap.post_generate.assert_called_once_with(
+        base_path=tmp_path / "base" / "myapplication"
     )
 
 
@@ -100,6 +116,8 @@ def test_new_app_missing_template(monkeypatch, new_command, tmp_path):
         "app_name": "myapplication",
     }
     new_command.build_app_context = mock.MagicMock(return_value=app_context)
+    bootstrap = BaseGuiBootstrap(new_command.console, {})
+    new_command.create_bootstrap = mock.MagicMock(return_value=bootstrap)
     new_command.build_gui_context = mock.MagicMock(
         return_value={
             "app_source": "main()",
@@ -117,12 +135,13 @@ def test_new_app_missing_template(monkeypatch, new_command, tmp_path):
     )
 
     # Create the new app, using the default template. This raises an error.
-    with pytest.raises(TemplateUnsupportedVersion):
-        new_command.new_app()
+    with pytest.raises(InvalidTemplateBranch):
+        new_command.new_app(project_overrides={})
 
     # App context is constructed
-    new_command.build_app_context.assert_called_once_with(None)
-    new_command.build_gui_context.assert_called_once_with(app_context, None)
+    new_command.build_app_context.assert_called_once_with({})
+    new_command.create_bootstrap.assert_called_once_with(app_context, {})
+    new_command.build_gui_context.assert_called_once_with(bootstrap, {})
 
     # The cookiecutter cache is updated once
     new_command.update_cookiecutter_cache.assert_called_once_with(
@@ -134,7 +153,7 @@ def test_new_app_missing_template(monkeypatch, new_command, tmp_path):
     new_command.tools.cookiecutter.assert_called_once_with(
         "~/.cookiecutters/briefcase-template",
         no_input=True,
-        output_dir=os.fsdecode(tmp_path),
+        output_dir=os.fsdecode(tmp_path / "base"),
         checkout="v37.42.7",
         extra_context={
             "formal_name": "My Application",
@@ -149,6 +168,7 @@ def test_new_app_missing_template(monkeypatch, new_command, tmp_path):
             "app_source": "main()",
             "pyproject_requires": "toga",
         },
+        default_config={"replay_dir": str(tmp_path / "data/templates/.replay")},
     )
 
 
@@ -166,6 +186,8 @@ def test_new_app_dev(monkeypatch, new_command, tmp_path, briefcase_version):
         "app_name": "myapplication",
     }
     new_command.build_app_context = mock.MagicMock(return_value=app_context)
+    bootstrap = BaseGuiBootstrap(new_command.console, {})
+    new_command.create_bootstrap = mock.MagicMock(return_value=bootstrap)
     new_command.build_gui_context = mock.MagicMock(
         return_value={
             "app_source": "main()",
@@ -185,12 +207,14 @@ def test_new_app_dev(monkeypatch, new_command, tmp_path, briefcase_version):
         None,
     ]
 
-    # Create the new app, using the default template.
-    new_command.new_app()
+    # Create the new app, using the default template and no project overrides.
+    new_command.new_app(project_overrides={})
 
     # App context is constructed
-    new_command.build_app_context.assert_called_once_with(None)
-    new_command.build_gui_context.assert_called_once_with(app_context, None)
+    new_command.build_app_context.assert_called_once_with({})
+    new_command.create_bootstrap.assert_called_once_with(app_context, {})
+    new_command.build_gui_context.assert_called_once_with(bootstrap, {})
+
     # Template is updated
     assert new_command.update_cookiecutter_cache.mock_calls == [
         mock.call(
@@ -209,40 +233,40 @@ def test_new_app_dev(monkeypatch, new_command, tmp_path, briefcase_version):
             mock.call(
                 "~/.cookiecutters/briefcase-template",
                 no_input=True,
-                output_dir=os.fsdecode(tmp_path),
+                output_dir=os.fsdecode(tmp_path / "base"),
                 checkout="v37.42.7",
                 extra_context={
                     "formal_name": "My Application",
                     "class_name": "MyApplication",
                     "app_name": "myapplication",
-                    # The expected app context
-                    # should now also contain the
-                    # default template and branch
+                    # The expected app context should now also contain the default
+                    # template and branch
                     "template_source": "https://github.com/beeware/briefcase-template",
                     "template_branch": "v37.42.7",
                     "briefcase_version": briefcase_version,
                     "app_source": "main()",
                     "pyproject_requires": "toga",
                 },
+                default_config={"replay_dir": str(tmp_path / "data/templates/.replay")},
             ),
             mock.call(
                 "~/.cookiecutters/briefcase-template",
                 no_input=True,
-                output_dir=os.fsdecode(tmp_path),
+                output_dir=os.fsdecode(tmp_path / "base"),
                 checkout="main",
                 extra_context={
                     "formal_name": "My Application",
                     "class_name": "MyApplication",
                     "app_name": "myapplication",
-                    # The expected app context
-                    # should now also contain the
-                    # default template and branch
+                    # The expected app context should now also contain the default
+                    # template and branch
                     "template_source": "https://github.com/beeware/briefcase-template",
-                    "template_branch": "v37.42.7",
+                    "template_branch": "main",
                     "briefcase_version": briefcase_version,
                     "app_source": "main()",
                     "pyproject_requires": "toga",
                 },
+                default_config={"replay_dir": str(tmp_path / "data/templates/.replay")},
             ),
         ]
     )
@@ -258,6 +282,8 @@ def test_new_app_with_template(monkeypatch, new_command, tmp_path):
         "app_name": "myapplication",
     }
     new_command.build_app_context = mock.MagicMock(return_value=app_context)
+    bootstrap = BaseGuiBootstrap(new_command.console, {})
+    new_command.create_bootstrap = mock.MagicMock(return_value=bootstrap)
     new_command.build_gui_context = mock.MagicMock(
         return_value={
             "app_source": "main()",
@@ -269,12 +295,14 @@ def test_new_app_with_template(monkeypatch, new_command, tmp_path):
     )
     new_command.tools.cookiecutter = mock.MagicMock(spec_set=cookiecutter)
 
-    # Create a new app, with a specific template.
-    new_command.new_app(template="https://example.com/other.git")
+    # Create a new app, with a specific template and no project overrides
+    new_command.new_app(template="https://example.com/other.git", project_overrides={})
 
     # App context is constructed
-    new_command.build_app_context.assert_called_once_with(None)
-    new_command.build_gui_context.assert_called_once_with(app_context, None)
+    new_command.build_app_context.assert_called_once_with({})
+    new_command.create_bootstrap.assert_called_once_with(app_context, {})
+    new_command.build_gui_context.assert_called_once_with(bootstrap, {})
+
     # Template is updated
     new_command.update_cookiecutter_cache.assert_called_once_with(
         template="https://example.com/other.git",
@@ -284,7 +312,7 @@ def test_new_app_with_template(monkeypatch, new_command, tmp_path):
     new_command.tools.cookiecutter.assert_called_once_with(
         "https://example.com/other.git",
         no_input=True,
-        output_dir=os.fsdecode(tmp_path),
+        output_dir=os.fsdecode(tmp_path / "base"),
         checkout="v37.42.7",
         extra_context={
             "formal_name": "My Application",
@@ -299,6 +327,7 @@ def test_new_app_with_template(monkeypatch, new_command, tmp_path):
             "app_source": "main()",
             "pyproject_requires": "toga",
         },
+        default_config={"replay_dir": str(tmp_path / "data/templates/.replay")},
     )
 
 
@@ -311,6 +340,8 @@ def test_new_app_with_invalid_template(monkeypatch, new_command, tmp_path):
         "app_name": "myapplication",
     }
     new_command.build_app_context = mock.MagicMock(return_value=app_context)
+    bootstrap = BaseGuiBootstrap(new_command.console, {})
+    new_command.create_bootstrap = mock.MagicMock(return_value=bootstrap)
     new_command.build_gui_context = mock.MagicMock(
         return_value={
             "app_source": "main()",
@@ -327,13 +358,18 @@ def test_new_app_with_invalid_template(monkeypatch, new_command, tmp_path):
         cookiecutter_exceptions.RepositoryNotFound
     )
 
-    # Create a new app, with a specific template.
+    # Create a new app, with a specific template and no project overrides
     with pytest.raises(InvalidTemplateRepository):
-        new_command.new_app(template="https://example.com/other.git")
+        new_command.new_app(
+            template="https://example.com/other.git",
+            project_overrides={},
+        )
 
     # App context is constructed
-    new_command.build_app_context.assert_called_once_with(None)
-    new_command.build_gui_context.assert_called_once_with(app_context, None)
+    new_command.build_app_context.assert_called_once_with({})
+    new_command.create_bootstrap.assert_called_once_with(app_context, {})
+    new_command.build_gui_context.assert_called_once_with(bootstrap, {})
+
     # Template is updated
     new_command.update_cookiecutter_cache.assert_called_once_with(
         template="https://example.com/other.git",
@@ -343,7 +379,7 @@ def test_new_app_with_invalid_template(monkeypatch, new_command, tmp_path):
     new_command.tools.cookiecutter.assert_called_once_with(
         "https://example.com/other.git",
         no_input=True,
-        output_dir=os.fsdecode(tmp_path),
+        output_dir=os.fsdecode(tmp_path / "base"),
         checkout="v37.42.7",
         extra_context={
             "formal_name": "My Application",
@@ -358,6 +394,7 @@ def test_new_app_with_invalid_template(monkeypatch, new_command, tmp_path):
             "app_source": "main()",
             "pyproject_requires": "toga",
         },
+        default_config={"replay_dir": str(tmp_path / "data/templates/.replay")},
     )
 
 
@@ -371,6 +408,8 @@ def test_new_app_with_invalid_template_branch(monkeypatch, new_command, tmp_path
         "app_name": "myapplication",
     }
     new_command.build_app_context = mock.MagicMock(return_value=app_context)
+    bootstrap = BaseGuiBootstrap(new_command.console, {})
+    new_command.create_bootstrap = mock.MagicMock(return_value=bootstrap)
     new_command.build_gui_context = mock.MagicMock(
         return_value={
             "app_source": "main()",
@@ -388,12 +427,16 @@ def test_new_app_with_invalid_template_branch(monkeypatch, new_command, tmp_path
     )
 
     # Create a new app, with a specific template; this raises an error
-    with pytest.raises(TemplateUnsupportedVersion):
-        new_command.new_app(template="https://example.com/other.git")
+    with pytest.raises(InvalidTemplateBranch):
+        new_command.new_app(
+            template="https://example.com/other.git",
+            project_overrides={},
+        )
 
     # App context is constructed
-    new_command.build_app_context.assert_called_once_with(None)
-    new_command.build_gui_context.assert_called_once_with(app_context, None)
+    new_command.build_app_context.assert_called_once_with({})
+    new_command.create_bootstrap.assert_called_once_with(app_context, {})
+    new_command.build_gui_context.assert_called_once_with(bootstrap, {})
 
     # Template is updated
     new_command.update_cookiecutter_cache.assert_called_once_with(
@@ -405,7 +448,7 @@ def test_new_app_with_invalid_template_branch(monkeypatch, new_command, tmp_path
     new_command.tools.cookiecutter.assert_called_once_with(
         "https://example.com/other.git",
         no_input=True,
-        output_dir=os.fsdecode(tmp_path),
+        output_dir=os.fsdecode(tmp_path / "base"),
         checkout="v37.42.7",
         extra_context={
             "formal_name": "My Application",
@@ -420,6 +463,7 @@ def test_new_app_with_invalid_template_branch(monkeypatch, new_command, tmp_path
             "app_source": "main()",
             "pyproject_requires": "toga",
         },
+        default_config={"replay_dir": str(tmp_path / "data/templates/.replay")},
     )
 
 
@@ -432,6 +476,8 @@ def test_new_app_with_branch(monkeypatch, new_command, tmp_path):
         "app_name": "myapplication",
     }
     new_command.build_app_context = mock.MagicMock(return_value=app_context)
+    bootstrap = BaseGuiBootstrap(new_command.console, {})
+    new_command.create_bootstrap = mock.MagicMock(return_value=bootstrap)
     new_command.build_gui_context = mock.MagicMock(
         return_value={
             "app_source": "main()",
@@ -444,11 +490,13 @@ def test_new_app_with_branch(monkeypatch, new_command, tmp_path):
     new_command.tools.cookiecutter = mock.MagicMock(spec_set=cookiecutter)
 
     # Create a new app, with a specific template branch.
-    new_command.new_app(template_branch="experimental")
+    new_command.new_app(template_branch="experimental", project_overrides={})
 
     # App context is constructed
-    new_command.build_app_context.assert_called_once_with(None)
-    new_command.build_gui_context.assert_called_once_with(app_context, None)
+    new_command.build_app_context.assert_called_once_with({})
+    new_command.create_bootstrap.assert_called_once_with(app_context, {})
+    new_command.build_gui_context.assert_called_once_with(bootstrap, {})
+
     # Template is updated
     new_command.update_cookiecutter_cache.assert_called_once_with(
         template="https://github.com/beeware/briefcase-template",
@@ -458,7 +506,7 @@ def test_new_app_with_branch(monkeypatch, new_command, tmp_path):
     new_command.tools.cookiecutter.assert_called_once_with(
         "https://example.com/other.git",
         no_input=True,
-        output_dir=os.fsdecode(tmp_path),
+        output_dir=os.fsdecode(tmp_path / "base"),
         checkout="experimental",
         extra_context={
             "formal_name": "My Application",
@@ -473,6 +521,7 @@ def test_new_app_with_branch(monkeypatch, new_command, tmp_path):
             "app_source": "main()",
             "pyproject_requires": "toga",
         },
+        default_config={"replay_dir": str(tmp_path / "data/templates/.replay")},
     )
 
 
@@ -490,6 +539,8 @@ def test_new_app_unused_project_overrides(
         "app_name": "myapplication",
     }
     new_command.build_app_context = mock.MagicMock(return_value=app_context)
+    bootstrap = BaseGuiBootstrap(new_command.console, {})
+    new_command.create_bootstrap = mock.MagicMock(return_value=bootstrap)
     new_command.build_gui_context = mock.MagicMock(
         return_value={
             "app_source": "main()",
@@ -506,8 +557,11 @@ def test_new_app_unused_project_overrides(
 
     # App context is constructed
     new_command.build_app_context.assert_called_once_with({"unused": "override"})
-    new_command.build_gui_context.assert_called_once_with(
+    new_command.create_bootstrap.assert_called_once_with(
         app_context, {"unused": "override"}
+    )
+    new_command.build_gui_context.assert_called_once_with(
+        bootstrap, {"unused": "override"}
     )
     # Template is updated
     new_command.update_cookiecutter_cache.assert_called_once_with(
@@ -518,7 +572,7 @@ def test_new_app_unused_project_overrides(
     new_command.tools.cookiecutter.assert_called_once_with(
         "~/.cookiecutters/briefcase-template",
         no_input=True,
-        output_dir=os.fsdecode(tmp_path),
+        output_dir=os.fsdecode(tmp_path / "base"),
         checkout="v37.42.7",
         extra_context={
             "formal_name": "My Application",
@@ -533,6 +587,7 @@ def test_new_app_unused_project_overrides(
             "app_source": "main()",
             "pyproject_requires": "toga",
         },
+        default_config={"replay_dir": str(tmp_path / "data/templates/.replay")},
     )
 
     unused_project_override_warning = (
@@ -547,7 +602,7 @@ def test_abort_if_directory_exists(monkeypatch, new_command, tmp_path):
     monkeypatch.setattr(briefcase, "__version__", "37.42.7")
 
     # Create a colliding app name.
-    (tmp_path / "myapplication").mkdir()
+    (tmp_path / "base/myapplication").mkdir(parents=True)
 
     app_context = {
         "formal_name": "My Application",
@@ -555,6 +610,8 @@ def test_abort_if_directory_exists(monkeypatch, new_command, tmp_path):
         "app_name": "myapplication",
     }
     new_command.build_app_context = mock.MagicMock(return_value=app_context)
+    bootstrap = BaseGuiBootstrap(new_command.console, {})
+    new_command.create_bootstrap = mock.MagicMock(return_value=bootstrap)
     new_command.build_gui_context = mock.MagicMock(
         return_value={
             "app_source": "main()",
@@ -569,11 +626,13 @@ def test_abort_if_directory_exists(monkeypatch, new_command, tmp_path):
     # Create the new app, using the default template.
     # This will raise an error due to the colliding directory
     with pytest.raises(BriefcaseCommandError):
-        new_command.new_app()
+        new_command.new_app(project_overrides={})
 
     # App context is constructed
-    new_command.build_app_context.assert_called_once_with(None)
-    new_command.build_gui_context.assert_called_once_with(app_context, None)
+    new_command.build_app_context.assert_called_once_with({})
+    new_command.create_bootstrap.assert_called_once_with(app_context, {})
+    new_command.build_gui_context.assert_called_once_with(bootstrap, {})
+
     # Template won't be updated or unrolled
     # Cookiecutter was *not* invoked
     assert new_command.update_cookiecutter_cache.call_count == 0

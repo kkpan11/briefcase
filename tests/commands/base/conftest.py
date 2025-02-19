@@ -2,7 +2,8 @@ import pytest
 
 from briefcase.commands.base import BaseCommand
 from briefcase.config import AppConfig
-from briefcase.console import Console, Log
+
+from ...utils import DummyConsole
 
 
 class DummyCommand(BaseCommand):
@@ -15,8 +16,7 @@ class DummyCommand(BaseCommand):
     description = "Dummy base command"
 
     def __init__(self, *args, **kwargs):
-        kwargs.setdefault("logger", Log())
-        kwargs.setdefault("console", Console())
+        kwargs.setdefault("console", DummyConsole())
         super().__init__(*args, **kwargs)
 
         self.actions = []
@@ -47,7 +47,10 @@ class DummyCommand(BaseCommand):
 
 @pytest.fixture
 def base_command(tmp_path):
-    command = DummyCommand(base_path=tmp_path / "base_path")
+    command = DummyCommand(
+        base_path=tmp_path / "base_path",
+        data_path=tmp_path / "data_path",
+    )
     command.parse_options(["-r", "default"])
     return command
 
@@ -102,7 +105,7 @@ class OtherDummyCommand(BaseCommand):
 
 @pytest.fixture
 def other_command(tmp_path):
-    return OtherDummyCommand(base_path=tmp_path, logger=Log(), console=Console())
+    return OtherDummyCommand(base_path=tmp_path, console=DummyConsole())
 
 
 @pytest.fixture
@@ -114,4 +117,5 @@ def my_app():
         version="1.2.3",
         description="This is a simple app",
         sources=["src/my_app"],
+        license={"file": "LICENSE"},
     )

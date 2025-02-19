@@ -36,6 +36,24 @@ class PackageCommand(BaseCommand):
         :param app: The app config
         """
 
+    def clean_dist_folder(self, app, **options):
+        """Clean up any existing artefacts in the dist folder.
+
+        Ensures that the dist folder exists, and *doesn't* contain the distribution
+        artefact.
+
+        :param app: The app being packaged
+        :param options: Any additional arguments passed to the package command. This is
+            required because backends that need to *resume* packaging (e.g.,
+            notarization on macOS), need to ignore the "clean" behavior and preserve
+            the existing artefact.
+        """
+        if self.distribution_path(app).exists():
+            self.distribution_path(app).unlink()
+        else:
+            # Ensure the dist folder exists.
+            self.dist_path.mkdir(exist_ok=True)
+
     def package_app(self, app: AppConfig, **options):
         """Package an application.
 
@@ -88,18 +106,15 @@ class PackageCommand(BaseCommand):
         # package in the requested format.
         self.verify_app(app)
 
-        # If the distribution artefact already exists, remove it.
-        if self.distribution_path(app).exists():
-            self.distribution_path(app).unlink()
-        else:
-            # Ensure the dist folder exists.
-            self.dist_path.mkdir(exist_ok=True)
+        # Make sure the dist folder exists, and doesn't contain an existing artefact for
+        # this app.
+        self.clean_dist_folder(app, **options)
 
         # Package the app
         state = self.package_app(app, **full_options(state, options))
 
         filename = self.distribution_path(app).relative_to(self.base_path)
-        self.logger.info(f"Packaged {filename}", prefix=app.app_name)
+        self.console.info(f"Packaged {filename}", prefix=app.app_name)
         return state
 
     def add_options(self, parser):
