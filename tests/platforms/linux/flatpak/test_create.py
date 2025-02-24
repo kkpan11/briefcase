@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from briefcase.console import Console, Log
+from briefcase.console import Console
 from briefcase.exceptions import BriefcaseConfigError, UnsupportedHostError
 from briefcase.integrations.flatpak import Flatpak
 from briefcase.platforms.linux.flatpak import LinuxFlatpakCreateCommand
@@ -11,7 +11,6 @@ from briefcase.platforms.linux.flatpak import LinuxFlatpakCreateCommand
 @pytest.fixture
 def create_command(tmp_path):
     return LinuxFlatpakCreateCommand(
-        logger=Log(),
         console=Console(),
         base_path=tmp_path / "base_path",
         data_path=tmp_path / "briefcase",
@@ -54,7 +53,6 @@ DEFAULT_FINISH_ARGS = {
     "filesystem=xdg-config": True,
     "filesystem=xdg-data": True,
     "filesystem=xdg-documents": True,
-    "socket=session-bus": True,
 }
 
 
@@ -89,7 +87,6 @@ DEFAULT_FINISH_ARGS = {
                     "filesystem=xdg-config": True,
                     "filesystem=xdg-data": True,
                     "filesystem=xdg-documents": True,
-                    "socket=session-bus": True,
                     "allow=bluetooth": True,
                 },
             },
@@ -221,7 +218,6 @@ DEFAULT_FINISH_ARGS = {
                     "filesystem=xdg-config": True,
                     "filesystem=xdg-data": True,
                     "filesystem=xdg-documents": True,
-                    "socket=session-bus": True,
                     "allow=bluetooth": True,
                 },
             },

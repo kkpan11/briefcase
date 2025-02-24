@@ -5,10 +5,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from briefcase.console import Console, Log
+from briefcase.console import Console
 from briefcase.exceptions import BriefcaseCommandError
 from briefcase.integrations.android_sdk import AndroidSDK
-from briefcase.integrations.download import Download
+from briefcase.integrations.file import File
 from briefcase.integrations.subprocess import Subprocess
 from briefcase.platforms.android.gradle import GradleOpenCommand
 
@@ -32,14 +32,13 @@ def create_sdk_manager(tmp_path, extension=""):
 @pytest.fixture
 def open_command(tmp_path, first_app_config):
     command = GradleOpenCommand(
-        logger=Log(),
         console=Console(),
         base_path=tmp_path / "base_path",
         data_path=tmp_path / "briefcase",
     )
     command.tools.os = MagicMock(spec_set=os)
     command.tools.subprocess = MagicMock(spec_set=Subprocess)
-    command.tools.download = MagicMock(spec_set=Download)
+    command.tools.file.download = MagicMock(spec_set=File.download)
 
     # Mock all apps as targeting version 0.3.15
     command._briefcase_toml = defaultdict(

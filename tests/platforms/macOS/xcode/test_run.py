@@ -1,14 +1,13 @@
 # Xcode uses the same run implementation as the base app;
 # Run a basic test to ensure coverage, but fall back to
 # the app backend for exhaustive tests.
-import os
 import subprocess
 from signal import SIGTERM
 from unittest import mock
 
 import pytest
 
-from briefcase.console import Console, Log
+from briefcase.console import Console
 from briefcase.integrations.subprocess import Subprocess
 from briefcase.platforms.macOS import macOS_log_clean_filter
 from briefcase.platforms.macOS.xcode import macOSXcodeRunCommand
@@ -17,7 +16,6 @@ from briefcase.platforms.macOS.xcode import macOSXcodeRunCommand
 @pytest.fixture
 def run_command(tmp_path):
     command = macOSXcodeRunCommand(
-        logger=Log(),
         console=Console(),
         base_path=tmp_path / "base_path",
         data_path=tmp_path / "briefcase",
@@ -69,7 +67,7 @@ def test_run_app(run_command, first_app_config, sleep_zero, tmp_path, monkeypatc
         bufsize=1,
     )
     run_command.tools.subprocess.run.assert_called_with(
-        ["open", "-n", os.fsdecode(bin_path)],
+        ["open", "-n", bin_path],
         cwd=tmp_path / "home",
         check=True,
     )
@@ -132,7 +130,7 @@ def test_run_app_with_passthrough(
         bufsize=1,
     )
     run_command.tools.subprocess.run.assert_called_with(
-        ["open", "-n", os.fsdecode(bin_path), "--args", "foo", "--bar"],
+        ["open", "-n", bin_path, "--args", "foo", "--bar"],
         cwd=tmp_path / "home",
         check=True,
     )
@@ -190,7 +188,7 @@ def test_run_app_test_mode(
         bufsize=1,
     )
     run_command.tools.subprocess.run.assert_called_with(
-        ["open", "-n", os.fsdecode(bin_path)],
+        ["open", "-n", bin_path],
         cwd=tmp_path / "home",
         check=True,
         env={"BRIEFCASE_MAIN_MODULE": "tests.first_app"},
@@ -254,7 +252,7 @@ def test_run_app_test_mode_with_passthrough(
         bufsize=1,
     )
     run_command.tools.subprocess.run.assert_called_with(
-        ["open", "-n", os.fsdecode(bin_path), "--args", "foo", "--bar"],
+        ["open", "-n", bin_path, "--args", "foo", "--bar"],
         cwd=tmp_path / "home",
         check=True,
         env={"BRIEFCASE_MAIN_MODULE": "tests.first_app"},

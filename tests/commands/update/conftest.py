@@ -2,9 +2,8 @@ import pytest
 
 from briefcase.commands import UpdateCommand
 from briefcase.config import AppConfig
-from briefcase.console import Console, Log
 
-from ...utils import create_file
+from ...utils import DummyConsole, create_file
 
 
 class DummyUpdateCommand(UpdateCommand):
@@ -19,8 +18,7 @@ class DummyUpdateCommand(UpdateCommand):
     description = "Dummy update command"
 
     def __init__(self, *args, apps, **kwargs):
-        kwargs.setdefault("logger", Log())
-        kwargs.setdefault("console", Console())
+        kwargs.setdefault("console", DummyConsole())
         super().__init__(*args, apps=apps, **kwargs)
 
         self.actions = []
@@ -73,6 +71,13 @@ class DummyUpdateCommand(UpdateCommand):
         self.actions.append(("support", app.app_name))
         create_file(self.bundle_path(app) / "support/content.txt", "app support")
 
+    def cleanup_stub_binary(self, app):
+        self.actions.append(("cleanup-stub", app.app_name))
+
+    def install_stub_binary(self, app):
+        self.actions.append(("stub", app.app_name))
+        create_file(self.bundle_path(app) / "stub.exe", "app stub")
+
     def cleanup_app_content(self, app):
         self.actions.append(("cleanup", app.app_name))
 
@@ -88,6 +93,7 @@ def update_command(tmp_path):
                 version="0.0.1",
                 description="The first simple app",
                 sources=["src/first"],
+                license={"file": "LICENSE"},
             ),
             "second": AppConfig(
                 app_name="second",
@@ -95,6 +101,7 @@ def update_command(tmp_path):
                 version="0.0.2",
                 description="The second simple app",
                 sources=["src/second"],
+                license={"file": "LICENSE"},
             ),
         },
     )

@@ -104,7 +104,7 @@ you can re-run Briefcase.
             #   xcode-select: error: tool 'xcodebuild' requires Xcode, but active
             #   developer directory '/Library/Developer/CommandLineTools' is a
             #   command line tools instance
-            output = tools.subprocess.check_output(["xcodebuild", "-version"])
+            output = tools.subprocess.check_output(["xcodebuild", "-version"], quiet=1)
 
             if min_version is not None:
                 # Look for a line in the output that reads "Xcode X.Y.Z"
@@ -133,7 +133,7 @@ you can re-run Briefcase.
                         # Version number is acceptable
                         return
 
-                tools.logger.warning(
+                tools.console.warning(
                     """
 *************************************************************************
 ** WARNING: Unable to determine the version of Xcode that is installed **
@@ -187,6 +187,7 @@ and then re-run Briefcase.
                 ) from e
 
             else:
+                tools.subprocess.output_error(e)
                 raise BriefcaseCommandError(
                     """\
 An Xcode install appears to exist, but Briefcase was unable to
@@ -250,7 +251,7 @@ class XcodeCliTools(Tool):
         #
         # Any other status code is a problem.
         try:
-            tools.subprocess.check_output(["xcode-select", "--install"])
+            tools.subprocess.check_output(["xcode-select", "--install"], quiet=1)
             raise BriefcaseCommandError(
                 """\
 The command line developer tools are not installed.
@@ -261,7 +262,7 @@ to continue, and re-run Briefcase once that installation is complete.
             )
         except subprocess.CalledProcessError as e:
             if e.returncode != 1:
-                tools.logger.warning(
+                tools.console.warning(
                     """
 *************************************************************************
 ** WARNING: Unable to determine if Xcode is installed                  **
@@ -294,10 +295,10 @@ to continue, and re-run Briefcase once that installation is complete.
         # tools return a status code of 69 (nice...) if the license has not been
         # accepted. In this case, we can prompt the user to accept the license.
         try:
-            tools.subprocess.check_output(["/usr/bin/clang", "--version"])
+            tools.subprocess.check_output(["/usr/bin/clang", "--version"], quiet=1)
         except subprocess.CalledProcessError as e:
             if e.returncode == 69:
-                tools.logger.info(
+                tools.console.info(
                     """
 Use of Xcode and the iOS developer tools are covered by a license that must be
 accepted before you can use those tools.
@@ -339,7 +340,7 @@ You need to accept the Xcode license before Briefcase can package your app.
 """
                         )
                     else:
-                        tools.logger.warning(
+                        tools.console.warning(
                             """
 *************************************************************************
 ** WARNING: Unable to determine if the Xcode license has been accepted **
@@ -362,7 +363,8 @@ You need to accept the Xcode license before Briefcase can package your app.
 """
                         )
             else:
-                tools.logger.warning(
+                tools.subprocess.output_error(e)
+                tools.console.warning(
                     """
 *************************************************************************
 ** WARNING: Unable to determine if the Xcode license has been accepted **
@@ -407,7 +409,7 @@ def get_simulators(
     # If the simulator frameworks don't exist, they will be downloaded
     # and installed. This should only occur on first execution.
     if not Path(simulator_location).exists():
-        tools.input.prompt(
+        tools.console.prompt(
             f"""
 It looks like the {os_name} Simulator is not installed. The {os_name} Simulator
 must be installed with administrator privileges.
@@ -416,7 +418,7 @@ xcodebuild will prompt you for your admin password so that it can download
 and install the simulator.
 """
         )
-        tools.input("Press Return to continue: ")
+        tools.console("Press Return to continue: ")
 
     try:
         simctl_data = tools.subprocess.parse_output(
@@ -498,15 +500,16 @@ def get_device_state(tools: ToolCache, udid: str) -> str:
 IDENTITY_RE = re.compile(r"\s*\d+\) ([0-9A-F]{40}) \"(.*)\"")
 
 
-def get_identities(tools: ToolCache, policy: str) -> dict[str, str]:
+def get_identities(tools: ToolCache, policy: str | None = None) -> dict[str, str]:
     """Obtain a set of valid identities for the given policy.
 
     :param tools: ToolCache of available tools
-    :param policy: The identity policy to evaluate (e.g., ``codesigning``)
+    :param policy: The identity policy to evaluate (e.g., ``codesigning``).
+        If None, no policy filtering is applied.
     """
     try:
         output = tools.subprocess.check_output(
-            ["security", "find-identity", "-v", "-p", policy],
+            ["security", "find-identity", "-v"] + (["-p", policy] if policy else []),
         )
 
         return dict(

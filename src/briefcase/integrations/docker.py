@@ -5,9 +5,9 @@ import os
 import socket
 import subprocess
 import sys
+from collections.abc import Iterable, Mapping
 from functools import lru_cache
 from pathlib import Path, PosixPath, PurePosixPath
-from typing import Iterable, Mapping
 
 from packaging.version import InvalidVersion, Version
 
@@ -173,6 +173,7 @@ See https://docs.docker.com/go/buildx/ to install the buildx plugin.
                 )
                 .split("Docker version ")[1]
                 .split(",")[0]
+                .split("-")[0]
             )
 
             # Ensure Docker version is compatible
@@ -185,9 +186,9 @@ See https://docs.docker.com/go/buildx/ to install the buildx plugin.
                     )
                 )
         except (InvalidVersion, IndexError):
-            tools.logger.warning(cls.UNKNOWN_DOCKER_VERSION_WARNING)
+            tools.console.warning(cls.UNKNOWN_DOCKER_VERSION_WARNING)
         except subprocess.CalledProcessError:
-            tools.logger.warning(cls.DOCKER_INSTALLATION_STATUS_UNKNOWN_WARNING)
+            tools.console.warning(cls.DOCKER_INSTALLATION_STATUS_UNKNOWN_WARNING)
         except OSError as e:
             # Docker executable doesn't exist
             raise BriefcaseCommandError(
@@ -206,6 +207,7 @@ See https://docs.docker.com/go/buildx/ to install the buildx plugin.
             tools.subprocess.check_output(
                 ["docker", "info"],
                 env=cls.subprocess_env(),
+                quiet=1,
             )
         except subprocess.CalledProcessError as e:
             failure_output = e.output
@@ -219,6 +221,7 @@ See https://docs.docker.com/go/buildx/ to install the buildx plugin.
             ):
                 raise BriefcaseCommandError(cls.DAEMON_NOT_RUNNING_ERROR) from e
             else:
+                tools.subprocess.output_error(e)
                 raise BriefcaseCommandError(cls.GENERIC_DOCKER_ERROR) from e
 
     @classmethod
@@ -361,7 +364,7 @@ Delete this file and run Briefcase again.
         ).strip()
 
         if not image_id:
-            self.tools.logger.info(
+            self.tools.console.info(
                 f"Downloading Docker base image for {image_tag}...",
                 prefix=self.full_name,
             )
@@ -549,7 +552,7 @@ Delete this file and run Briefcase again.
             try:
                 self._x11_write_xauth_file(DISPLAY, xauth_file_path, proxy_display_num)
             except XauthDatabaseCreationFailure:
-                self.tools.logger.warning(
+                self.tools.console.warning(
                     """\
 An X11 authentication database could not be created for the display.
 
@@ -892,17 +895,17 @@ class DockerAppContext(Tool):
         self.image_tag = image_tag
         self.python_version = python_version
 
-        self.tools.logger.info(
+        self.tools.console.info(
             "Building Docker container image...",
             prefix=self.app.app_name,
         )
-        with self.tools.input.wait_bar("Building Docker image..."):
+        with self.tools.console.wait_bar("Building Docker image..."):
             # Install requirements for both building *and* running the app
             # (ensure a copy of system_requires is used to avoid modification)
             system_requires = getattr(self.app, "system_requires", []).copy()
             system_requires.extend(getattr(self.app, "system_runtime_requires", []))
 
-            with self.tools.logger.context("Docker"):
+            with self.tools.console.context("Docker"):
                 try:
                     self.tools.subprocess.run(
                         [
@@ -952,7 +955,7 @@ class DockerAppContext(Tool):
         if kwargs.get("interactive"):
             kwargs["stream_output"] = False
 
-        with self.tools.logger.context("Docker"):
+        with self.tools.console.context("Docker"):
             self.tools.subprocess.run(**self._dockerize_args(args, **kwargs))
 
     def check_output(self, args: SubprocessArgsT, **kwargs) -> str:

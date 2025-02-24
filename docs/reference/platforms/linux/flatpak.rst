@@ -9,7 +9,7 @@ Flatpak
 +--------+-------+-----+--------+-------+-----+--------+-----+-------+
 | x86‑64 | arm64 | x86 | x86‑64 | arm64 | x86 | x86‑64 | arm | arm64 |
 +========+=======+=====+========+=======+=====+========+=====+=======+
-|        |       |     |        |       | |v| | |f|    | |v| | |v|   |
+|        |       |     |        |       | |v| | |f|    | |v| | |f|   |
 +--------+-------+-----+--------+-------+-----+--------+-----+-------+
 
 `Flatpak <https://flatpak.org>`__ provides a way for developers to distribute
@@ -64,9 +64,6 @@ the following sizes:
 * 128px
 * 256px
 * 512px
-
-Splash Image format
-===================
 
 Flatpaks do not support splash screens or installer images.
 

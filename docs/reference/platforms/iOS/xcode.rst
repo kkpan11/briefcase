@@ -32,22 +32,24 @@ the following sizes:
 * 152px
 * 167px
 * 180px
+* 640px
 * 1024px
+* 1280px
+* 1920px
 
-Splash Image format
-===================
-
-iOS projects use ``.png`` format splash screen images. A splash screen should
-be a square, transparent image, provided in the following sizes:
-
-* 800px
-* 1600px
-* 2400px
-
-You can specify a background color for the splash screen using the
-``splash_background_color`` configuration setting.
+The icon will also be used to populate the splash screen. You can specify a
+background color for the splash screen using the ``splash_background_color``
+configuration setting.
 
 iOS projects do not support installer images.
+
+Colors
+======
+
+iOS allows for some customization of the colors used by your app:
+
+* ``splash_background_color`` is the color of the splash background that
+  displays while an app is loading.
 
 Additional options
 ==================
@@ -92,12 +94,16 @@ Briefcase cross platform permissions map to the following ``info`` keys:
 
 * ``camera``: ``NSCameraUsageDescription``
 * ``microphone``: ``NSMicrophoneUsageDescription``
-* ``coarse_location``: ``NSLocationDefaultAccuracyReduced=True`` if ``fine_location`` is
-  not defined, plus ``NSLocationWhenInUseUsageDescription`` if ``background_location``
-  is not defined
-* ``fine_location``: ``NSLocationDefaultAccuracyReduced=False``, plus
-  ``NSLocationWhenInUseUsageDescription`` if ``background_location`` is not defined
-* ``background_location``: ``NSLocationAlwaysAndWhenInUseUsageDescription``
+* ``coarse_location``
+  - ``NSLocationDefaultAccuracyReduced=True``
+  - ``NSLocationWhenInUseUsageDescription`` if ``fine_location`` is not defined
+* ``fine_location``
+  - ``NSLocationDefaultAccuracyReduced=False``
+  - ``NSLocationWhenInUseUsageDescription``
+* ``background_location``:
+  - ``NSLocationAlwaysAndWhenInUseUsageDescription``
+  - ``NSLocationWhenInUseUsageDescription`` if neither ``fine_location`` or ``coarse_location`` is set
+  - ``UIBackgroundModes`` will include ``location`` and ``processing``
 * ``photo_library``: ``NSPhotoLibraryAddUsageDescription``
 
 Platform quirks
@@ -127,13 +133,12 @@ PyPI to provide those wheels. Briefcase uses a `secondary repository
 
 This repository is maintained by the BeeWare project, and as a result, it does not have
 binary wheels for *every* package that is available on PyPI, or even every *version* of
-every package that is on PyPI. If you see any of the following messages when building an
-app for a mobile platform, then the package (or this version of it) probably isn't
-supported yet:
+every package that is on PyPI. If you see the message::
 
-* The error "Cannot compile native modules"
-* A reference to downloading a ``.tar.gz`` version of the package
-* A reference to ``Building wheels for collected packages: <package>``
+    ERROR: Could not find a version that satisfies the requirement <package name> (from versions: none)
+    ERROR: No matching distribution found for <package name>
+
+then the package (or the version that you've specified) probably isn't supported yet.
 
 It is *usually* possible to compile any binary package wheels for iOS, depending on the
 requirements of the package itself. If the package has a dependency on other binary
@@ -151,3 +156,57 @@ Contributions of new package recipes are welcome, and can be submitted as pull r
 Or, if you have a particular package that you'd like us to support, please visit the
 `issue tracker <https://github.com/beeware/mobile-forge/issues>`__ and provide details
 about that package.
+
+Requirements cannot be provided as source tarballs
+--------------------------------------------------
+
+Briefcase *cannot* install packages published as source tarballs into an iOS app, even
+if the package is a pure Python package that would produce a ``py3-none-any`` wheel.
+This is an inherent limitation in the use of source tarballs as a distribution format.
+
+If you need to install a package in an iOS app that is only published as a source
+tarball, you'll need to compile that package into a wheel first. If the package is pure
+Python, you can generate a ``py3-none-any`` wheel using ``pip wheel <package name>``. If
+the project has a binary component, you'll need to use `Mobile Forge
+<https://github.com/beeware/mobile-forge>`__ (or similar tooling) to compile compatible
+wheels.
+
+You can then directly add the wheel file to the ``requires`` definition for your app, or
+put the wheel in a folder and add:
+
+.. code-block:: TOML
+
+    requirement_installer_args = ["--find-links", "<path-to-wheel-folder>"]
+
+to your ``pyproject.toml``. This will instruct Briefcase to search that folder for
+compatible wheels during the installation process.
+
+Executable binary content in wheels
+-----------------------------------
+
+The iOS App Store has very stringent constraints on what can be included in an app
+bundle, and where it can be included. One of those constraints is that any executable
+content must be distributed as a framework, in the ``Frameworks`` folder of the iOS
+project.
+
+Briefcase's app template will process binary wheels to satisfy this requirement.
+However, it will only process binary content that is executable at runtime. Some
+packages (NumPy is one notable example) are known to distribute additional executable
+files, such as statically linked ``.a`` libraries, in their wheel content. These files
+are not usable at runtime, and Briefcase will not process them. If they're present in an
+app bundle at time of submission to the App Store, your app will not pass app
+validation, raising errors like:
+
+    Error: Validation failed Invalid bundle structure. The ``.../libsomething.a`` binary
+    file is not permitted. Your app cannot contain standalone executables or libraries,
+    other than a valid CFBundleExecutable of supported bundles.
+
+To avoid this, you must purge any binary content from your app before submission. You
+can do this using the ``cleanup_paths`` configuration option::
+
+    cleanup_paths = [
+        "*/app_packages.*/**/*.a",
+    ]
+
+This will find and purge all ``.a`` content in your app's dependencies. You can add
+additional patterns to remove other problematic content.

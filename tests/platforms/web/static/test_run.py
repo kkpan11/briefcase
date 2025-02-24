@@ -5,7 +5,7 @@ from unittest import mock
 
 import pytest
 
-from briefcase.console import Console, Log
+from briefcase.console import Console
 from briefcase.exceptions import BriefcaseCommandError
 from briefcase.platforms.web.static import (
     HTTPHandler,
@@ -25,7 +25,6 @@ class ErrnoError(OSError):
 @pytest.fixture
 def run_command(tmp_path):
     command = StaticWebRunCommand(
-        logger=Log(),
         console=Console(),
         base_path=tmp_path / "base_path",
         data_path=tmp_path / "briefcase",
@@ -44,6 +43,7 @@ def test_default_options(run_command):
         "update_requirements": False,
         "update_resources": False,
         "update_support": False,
+        "update_stub": False,
         "no_update": False,
         "test_mode": False,
         "passthrough": [],
@@ -66,6 +66,7 @@ def test_options(run_command):
         "update_requirements": False,
         "update_resources": False,
         "update_support": False,
+        "update_stub": False,
         "no_update": False,
         "test_mode": False,
         "passthrough": [],

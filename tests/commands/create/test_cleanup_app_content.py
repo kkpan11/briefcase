@@ -17,6 +17,12 @@ def myapp_unrolled(myapp, support_path, app_packages_path_index):
     create_file(support_path / "other/deep/b_file.doc", "wigs")
     create_file(support_path / "other/deep/other.doc", "wigs")
 
+    # Create a symlink to a file
+    (support_path / "dir1/symlink.txt").symlink_to(support_path / "dir2/b_file.txt")
+
+    # Create a symlink to a directory
+    (support_path / "mirror").symlink_to(support_path / "dir1")
+
     return myapp
 
 
@@ -25,7 +31,7 @@ def test_no_cleanup(create_command, myapp_unrolled, support_path, debug, capsys)
     """If there are no cleanup directives, bundle content isn't touched; but __pycache__
     is cleaned."""
     if debug:
-        create_command.logger.verbosity = LogLevel.DEBUG
+        create_command.console.verbosity = LogLevel.DEBUG
 
     # Cleanup app content
     create_command.cleanup_app_content(myapp_unrolled)
@@ -38,6 +44,10 @@ def test_no_cleanup(create_command, myapp_unrolled, support_path, debug, capsys)
     assert (support_path / "dir2/b_file.txt").exists()
     assert (support_path / "other/deep/b_file.doc").exists()
 
+    # Symlinks still exist
+    assert (support_path / "dir1/symlink.txt").is_symlink()
+    assert (support_path / "mirror").is_symlink()
+
     # Console output ends with the done message; the number of other messages depends on
     # whether debug is enabled.
     output = capsys.readouterr().out.split("\n")
@@ -49,7 +59,7 @@ def test_no_cleanup(create_command, myapp_unrolled, support_path, debug, capsys)
 def test_dir_cleanup(create_command, myapp_unrolled, support_path, debug, capsys):
     """A directory can be cleaned up."""
     if debug:
-        create_command.logger.verbosity = LogLevel.DEBUG
+        create_command.console.verbosity = LogLevel.DEBUG
 
     myapp_unrolled.cleanup_paths = ["path/to/support/dir1"]
 
@@ -60,6 +70,10 @@ def test_dir_cleanup(create_command, myapp_unrolled, support_path, debug, capsys
     assert not (support_path / "dir1").exists()
     assert (support_path / "dir2/b_file.txt").exists()
     assert (support_path / "other/deep/b_file.doc").exists()
+
+    # Directory symlinks still exists, but the file symlink doesn't
+    assert not (support_path / "dir1/symlink.txt").exists()
+    assert (support_path / "mirror").is_symlink()
 
     # Console output ends with the done message; the number of other messages depends on
     # whether debug is enabled.
@@ -72,7 +86,7 @@ def test_dir_cleanup(create_command, myapp_unrolled, support_path, debug, capsys
 def test_file_cleanup(create_command, myapp_unrolled, support_path, debug, capsys):
     """A single file can be cleaned up."""
     if debug:
-        create_command.logger.verbosity = LogLevel.DEBUG
+        create_command.console.verbosity = LogLevel.DEBUG
 
     myapp_unrolled.cleanup_paths = ["path/to/support/dir1/a_file1.txt"]
 
@@ -87,6 +101,10 @@ def test_file_cleanup(create_command, myapp_unrolled, support_path, debug, capsy
     assert not (support_path / "dir1/__pycache__").exists()
     assert (support_path / "other/deep/b_file.doc").exists()
 
+    # Symlinks still exist
+    assert (support_path / "dir1/symlink.txt").is_symlink()
+    assert (support_path / "mirror").is_symlink()
+
     # Console output ends with the done message; the number of other messages depends on
     # whether debug is enabled.
     output = capsys.readouterr().out.split("\n")
@@ -100,7 +118,7 @@ def test_all_files_in_dir_cleanup(
 ):
     """All files in a directory can be cleaned up."""
     if debug:
-        create_command.logger.verbosity = LogLevel.DEBUG
+        create_command.console.verbosity = LogLevel.DEBUG
 
     myapp_unrolled.cleanup_paths = ["path/to/support/dir1/*"]
 
@@ -117,18 +135,22 @@ def test_all_files_in_dir_cleanup(
     assert (support_path / "dir2/b_file.txt").exists()
     assert (support_path / "other/deep/b_file.doc").exists()
 
+    # Directory symlinks still exist; file symlink doesn't
+    assert not (support_path / "dir1/symlink.txt").exists()
+    assert (support_path / "mirror").is_symlink()
+
     # Console output ends with the done message; the number of other messages depends on
     # whether debug is enabled.
     output = capsys.readouterr().out.split("\n")
     assert output[-3] == "Removing unneeded app bundle content... done"
-    assert len(output) == (8 if debug else 4)
+    assert len(output) == (9 if debug else 4)
 
 
 @pytest.mark.parametrize("debug", [True, False])
 def test_dir_glob_cleanup(create_command, myapp_unrolled, support_path, debug, capsys):
     """A glob of directories can be cleaned up."""
     if debug:
-        create_command.logger.verbosity = LogLevel.DEBUG
+        create_command.console.verbosity = LogLevel.DEBUG
 
     myapp_unrolled.cleanup_paths = ["path/to/support/dir*"]
 
@@ -139,6 +161,10 @@ def test_dir_glob_cleanup(create_command, myapp_unrolled, support_path, debug, c
     assert not (support_path / "dir1").exists()
     assert not (support_path / "dir2").exists()
     assert (support_path / "other/deep/b_file.doc").exists()
+
+    # Directory symlinks still exist; file symlink doesn't
+    assert not (support_path / "dir1/symlink.txt").exists()
+    assert (support_path / "mirror").is_symlink()
 
     # Console output ends with the done message; the number of other messages depends on
     # whether debug is enabled.
@@ -151,7 +177,7 @@ def test_dir_glob_cleanup(create_command, myapp_unrolled, support_path, debug, c
 def test_file_glob_cleanup(create_command, myapp_unrolled, support_path, debug, capsys):
     """A glob of files can be cleaned up."""
     if debug:
-        create_command.logger.verbosity = LogLevel.DEBUG
+        create_command.console.verbosity = LogLevel.DEBUG
 
     myapp_unrolled.cleanup_paths = ["path/to/support/dir1/*.txt"]
 
@@ -166,18 +192,22 @@ def test_file_glob_cleanup(create_command, myapp_unrolled, support_path, debug, 
     assert (support_path / "dir2/b_file.txt").exists()
     assert (support_path / "other/deep/b_file.doc").exists()
 
+    # Directory symlinks still exist; file symlink doesn't
+    assert not (support_path / "dir1/symlink.txt").exists()
+    assert (support_path / "mirror").is_symlink()
+
     # Console output ends with the done message; the number of other messages depends on
     # whether debug is enabled.
     output = capsys.readouterr().out.split("\n")
     assert output[-3] == "Removing unneeded app bundle content... done"
-    assert len(output) == (7 if debug else 4)
+    assert len(output) == (8 if debug else 4)
 
 
 @pytest.mark.parametrize("debug", [True, False])
 def test_deep_glob_cleanup(create_command, myapp_unrolled, support_path, debug, capsys):
     """A glob that matches all directories will be added to the cleanup list."""
     if debug:
-        create_command.logger.verbosity = LogLevel.DEBUG
+        create_command.console.verbosity = LogLevel.DEBUG
 
     myapp_unrolled.cleanup_paths = ["path/to/support/**/b_file.*"]
 
@@ -193,6 +223,10 @@ def test_deep_glob_cleanup(create_command, myapp_unrolled, support_path, debug, 
     assert not (support_path / "other/deep/b_file.doc").exists()
     assert (support_path / "other/deep/other.doc").exists()
 
+    # Symlinks still exist
+    assert (support_path / "dir1/symlink.txt").is_symlink()
+    assert (support_path / "mirror").is_symlink()
+
     # Console output ends with the done message; the number of other messages depends on
     # whether debug is enabled.
     output = capsys.readouterr().out.split("\n")
@@ -201,12 +235,45 @@ def test_deep_glob_cleanup(create_command, myapp_unrolled, support_path, debug, 
 
 
 @pytest.mark.parametrize("debug", [True, False])
+def test_symlink_cleanup(create_command, myapp_unrolled, support_path, debug, capsys):
+    """Symlinks can be cleaned up."""
+    if debug:
+        create_command.console.verbosity = LogLevel.DEBUG
+
+    myapp_unrolled.cleanup_paths = [
+        "path/to/support/dir1/symlink.txt",
+        "path/to/support/mirror",
+    ]
+
+    # Cleanup app content
+    create_command.cleanup_app_content(myapp_unrolled)
+
+    # Confirm none of the files (except __pycache__) have been removed
+    assert (support_path / "dir1/a_file1.txt").exists()
+    assert (support_path / "dir1/a_file2.doc").exists()
+    assert (support_path / "dir1/b_file.txt").exists()
+    assert not (support_path / "dir1/__pycache__").exists()
+    assert (support_path / "dir2/b_file.txt").exists()
+    assert (support_path / "other/deep/b_file.doc").exists()
+
+    # Directory symlinks still exist; file symlink doesn't
+    assert not (support_path / "dir1/symlink.txt").exists()
+    assert not (support_path / "mirror").is_symlink()
+
+    # Console output ends with the done message; the number of other messages depends on
+    # whether debug is enabled.
+    output = capsys.readouterr().out.split("\n")
+    assert output[-3] == "Removing unneeded app bundle content... done"
+    assert len(output) == (7 if debug else 4)
+
+
+@pytest.mark.parametrize("debug", [True, False])
 def test_template_glob_cleanup(
     create_command, myapp_unrolled, support_path, debug, capsys
 ):
     """A glob of files specified in the template will be added to the cleanup list."""
     if debug:
-        create_command.logger.verbosity = LogLevel.DEBUG
+        create_command.console.verbosity = LogLevel.DEBUG
 
     # Define a cleanup_paths in the template *and* on the app
     create_command._briefcase_toml[myapp_unrolled] = {
@@ -228,6 +295,10 @@ def test_template_glob_cleanup(
     assert (support_path / "dir2/b_file.txt").exists()
     assert not (support_path / "other/deep/b_file.doc").exists()
 
+    # Symlinks still exist
+    assert (support_path / "dir1/symlink.txt").is_symlink()
+    assert (support_path / "mirror").is_symlink()
+
     # Console output ends with the done message; the number of other messages depends on
     # whether debug is enabled.
     output = capsys.readouterr().out.split("\n")
@@ -245,7 +316,7 @@ def test_non_existent_cleanup(
 ):
     """Referencing a specific file that doesn't exist doesn't cause a problem."""
     if debug:
-        create_command.logger.verbosity = LogLevel.DEBUG
+        create_command.console.verbosity = LogLevel.DEBUG
 
     myapp_unrolled.cleanup_paths = [
         # This file exists
@@ -267,6 +338,10 @@ def test_non_existent_cleanup(
     assert not (support_path / "dir1/__pycache__").exists()
     assert (support_path / "dir2/b_file.txt").exists()
     assert (support_path / "other/deep/b_file.doc").exists()
+
+    # Symlinks still exist
+    assert (support_path / "dir1/symlink.txt").is_symlink()
+    assert (support_path / "mirror").is_symlink()
 
     # Console output ends with the done message; the number of other messages depends on
     # whether debug is enabled.

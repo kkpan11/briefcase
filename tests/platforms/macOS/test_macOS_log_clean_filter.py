@@ -24,6 +24,10 @@ from briefcase.platforms.macOS.filters import macOS_log_clean_filter
             None,
         ),
         (
+            "getpwuid_r did not find a match for uid 501",
+            None,
+        ),
+        (
             'Filtering the log data using "senderImagePath ENDSWITH "/Toga Test!" '
             'OR (processImagePath ENDSWITH "/Toga Test!" '
             'AND (senderImagePath ENDSWITH "-iphonesimulator.so" '
@@ -59,13 +63,18 @@ from briefcase.platforms.macOS.filters import macOS_log_clean_filter
             "2022-11-14 13:21:15.341 Df My App[59972:780a15] (_ctypes.cpython-38-iphonesimulator.so) Hello World!",
             ("Hello World!", True),
         ),
-        # iOS App log
+        # iOS App log (old style .dylib libraries)
         (
             "2022-11-14 13:21:15.341 Df My App[59972:780a15] (_ctypes.cpython-312-iphonesimulator.dylib) Hello World!",
             ("Hello World!", True),
         ),
         (
             "2022-11-14 13:21:15.341 Df My App[59972:780a15] (_ctypes.cpython-38-iphonesimulator.dylib) Hello World!",
+            ("Hello World!", True),
+        ),
+        # iOS App log
+        (
+            "2022-11-14 13:21:15.341 Df My App[59972:780a15] (_ctypes) Hello World!",
             ("Hello World!", True),
         ),
         # Empty iOS App log (old style .so binaries)
@@ -77,13 +86,18 @@ from briefcase.platforms.macOS.filters import macOS_log_clean_filter
             "2022-11-14 13:21:15.341 Df My App[59972:780a15] (_ctypes.cpython-38-iphonesimulator.so) ",
             ("", True),
         ),
-        # Empty iOS App log
+        # Empty iOS App log (old style .dylib binaries)
         (
             "2022-11-14 13:21:15.341 Df My App[59972:780a15] (_ctypes.cpython-312-iphonesimulator.dylib) ",
             ("", True),
         ),
         (
             "2022-11-14 13:21:15.341 Df My App[59972:780a15] (_ctypes.cpython-38-iphonesimulator.dylib) ",
+            ("", True),
+        ),
+        # Empty iOS App log
+        (
+            "2022-11-14 13:21:15.341 Df My App[59972:780a15] (_ctypes) ",
             ("", True),
         ),
         # Unknown content

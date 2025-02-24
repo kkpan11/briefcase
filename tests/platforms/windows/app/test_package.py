@@ -1,3 +1,4 @@
+from pathlib import Path
 from subprocess import CalledProcessError
 from unittest import mock
 from zipfile import ZipFile
@@ -5,7 +6,7 @@ from zipfile import ZipFile
 import pytest
 
 import briefcase.platforms.windows
-from briefcase.console import Console, Log
+from briefcase.console import Console
 from briefcase.exceptions import BriefcaseCommandError
 from briefcase.integrations.subprocess import Subprocess
 from briefcase.integrations.windows_sdk import WindowsSDK
@@ -18,7 +19,6 @@ from ....utils import create_file
 @pytest.fixture
 def package_command(tmp_path):
     command = WindowsAppPackageCommand(
-        logger=Log(),
         console=Console(),
         base_path=tmp_path / "base_path",
         data_path=tmp_path / "briefcase",
@@ -213,7 +213,7 @@ def test_package_msi(package_command, first_app_config, kwargs, tmp_path):
             [
                 tmp_path / "wix/bin/heat.exe",
                 "dir",
-                "src",
+                Path("src"),
                 "-nologo",
                 "-gg",
                 "-sfrag",
@@ -389,7 +389,7 @@ def test_package_msi_with_codesigning(
             [
                 tmp_path / "wix/bin/heat.exe",
                 "dir",
-                "src",
+                Path("src"),
                 "-nologo",
                 "-gg",
                 "-sfrag",
@@ -530,14 +530,7 @@ def test_package_zip_with_codesigning(
             ]
             + additional_args
             + [
-                tmp_path
-                / "base_path"
-                / "build"
-                / "first-app"
-                / "windows"
-                / "app"
-                / "src"
-                / "First App.exe"
+                tmp_path / "base_path/build/first-app/windows/app/src/First App.exe",
             ],
             check=True,
         ),
@@ -595,14 +588,7 @@ def test_package_msi_failed_sign_app(package_command, first_app_config, tmp_path
                 "http://freetimestamps.com",
                 "-td",
                 "sha56",
-                tmp_path
-                / "base_path"
-                / "build"
-                / "first-app"
-                / "windows"
-                / "app"
-                / "src"
-                / "First App.exe",
+                tmp_path / "base_path/build/first-app/windows/app/src/First App.exe",
             ],
             check=True,
         )
@@ -628,7 +614,7 @@ def test_package_msi_failed_manifest(package_command, first_app_config, tmp_path
             [
                 tmp_path / "wix/bin/heat.exe",
                 "dir",
-                "src",
+                Path("src"),
                 "-nologo",
                 "-gg",
                 "-sfrag",
@@ -670,7 +656,7 @@ def test_package_msi_failed_compile(package_command, first_app_config, tmp_path)
             [
                 tmp_path / "wix/bin/heat.exe",
                 "dir",
-                "src",
+                Path("src"),
                 "-nologo",
                 "-gg",
                 "-sfrag",
@@ -731,7 +717,7 @@ def test_package_msi_failed_link(package_command, first_app_config, tmp_path):
             [
                 tmp_path / "wix/bin/heat.exe",
                 "dir",
-                "src",
+                Path("src"),
                 "-nologo",
                 "-gg",
                 "-sfrag",
@@ -836,14 +822,7 @@ def test_package_msi_failed_signing_msi(package_command, first_app_config, tmp_p
                 "http://freetimestamps.com",
                 "-td",
                 "sha56",
-                tmp_path
-                / "base_path"
-                / "build"
-                / "first-app"
-                / "windows"
-                / "app"
-                / "src"
-                / "First App.exe",
+                tmp_path / "base_path/build/first-app/windows/app/src/First App.exe",
             ],
             check=True,
         ),
@@ -852,7 +831,7 @@ def test_package_msi_failed_signing_msi(package_command, first_app_config, tmp_p
             [
                 tmp_path / "wix/bin/heat.exe",
                 "dir",
-                "src",
+                Path("src"),
                 "-nologo",
                 "-gg",
                 "-sfrag",

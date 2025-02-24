@@ -1,9 +1,7 @@
-import os
 import re
 import subprocess
 import uuid
 from pathlib import Path, PurePath
-from typing import List
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from briefcase.commands import CreateCommand, PackageCommand, RunCommand
@@ -21,7 +19,12 @@ class WindowsMixin:
     supported_host_os_reason = "Windows applications can only be built on Windows."
 
     def binary_path(self, app):
-        return self.bundle_path(app) / self.packaging_root / f"{app.formal_name}.exe"
+        if app.console_app:
+            return self.bundle_path(app) / self.packaging_root / f"{app.app_name}.exe"
+        else:
+            return (
+                self.bundle_path(app) / self.packaging_root / f"{app.formal_name}.exe"
+            )
 
     def distribution_path(self, app):
         suffix = "zip" if app.packaging_format == "zip" else "msi"
@@ -84,7 +87,7 @@ class WindowsCreateCommand(CreateCommand):
             # Create a DNS domain by reversing the bundle identifier
             domain = ".".join(app.bundle_identifier.split(".")[::-1])
             guid = uuid.uuid5(uuid.NAMESPACE_DNS, domain)
-            self.logger.info(f"Assigning {app.app_name} an application GUID of {guid}")
+            self.console.info(f"Assigning {app.app_name} an application GUID of {guid}")
 
         try:
             install_scope = "perMachine" if app.system_installer else "perUser"
@@ -102,7 +105,7 @@ class WindowsCreateCommand(CreateCommand):
         # On Windows, the support path is co-mingled with app content.
         # This means updating the support package is imperfect.
         # Warn the user that there could be problems.
-        self.logger.warning(
+        self.console.warning(
             """
 *************************************************************************
 ** WARNING: Support package update may be imperfect                    **
@@ -127,7 +130,7 @@ class WindowsRunCommand(RunCommand):
         self,
         app: AppConfig,
         test_mode: bool,
-        passthrough: List[str],
+        passthrough: list[str],
         **kwargs,
     ):
         """Start the application.
@@ -137,26 +140,40 @@ class WindowsRunCommand(RunCommand):
         :param passthrough: The list of arguments to pass to the app
         """
         # Set up the log stream
-        kwargs = self._prepare_app_env(app=app, test_mode=test_mode)
+        kwargs = self._prepare_app_kwargs(app=app, test_mode=test_mode)
 
-        # Start the app in a way that lets us stream the logs
-        app_popen = self.tools.subprocess.Popen(
-            [os.fsdecode(self.binary_path(app))] + passthrough,
-            cwd=self.tools.home_path,
-            encoding="UTF-8",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            bufsize=1,
-            **kwargs,
-        )
+        # Console apps must operate in non-streaming mode so that console input can
+        # be handled correctly. However, if we're in test mode, we *must* stream so
+        # that we can see the test exit sentinel
+        if app.console_app and not test_mode:
+            self.console.info("=" * 75)
+            self.tools.subprocess.run(
+                [self.binary_path(app)] + passthrough,
+                cwd=self.tools.home_path,
+                encoding="UTF-8",
+                bufsize=1,
+                stream_output=False,
+                **kwargs,
+            )
+        else:
+            # Start the app in a way that lets us stream the logs
+            app_popen = self.tools.subprocess.Popen(
+                [self.binary_path(app)] + passthrough,
+                cwd=self.tools.home_path,
+                encoding="UTF-8",
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+                **kwargs,
+            )
 
-        # Start streaming logs for the app.
-        self._stream_app_logs(
-            app,
-            popen=app_popen,
-            test_mode=test_mode,
-            clean_output=False,
-        )
+            # Start streaming logs for the app.
+            self._stream_app_logs(
+                app,
+                popen=app_popen,
+                test_mode=test_mode,
+                clean_output=False,
+            )
 
 
 class WindowsPackageCommand(PackageCommand):
@@ -317,7 +334,7 @@ class WindowsPackageCommand(PackageCommand):
             sign_app = True
         else:
             sign_app = False
-            self.logger.warning(
+            self.console.warning(
                 """
 *************************************************************************
 ** WARNING: No signing identity provided                               **
@@ -332,7 +349,7 @@ class WindowsPackageCommand(PackageCommand):
             )
 
         if sign_app:
-            self.logger.info("Signing App...", prefix=app.app_name)
+            self.console.info("Signing App...", prefix=app.app_name)
             sign_options = dict(
                 identity=identity,
                 file_digest=file_digest,
@@ -349,7 +366,7 @@ class WindowsPackageCommand(PackageCommand):
             self._package_msi(app)
 
             if sign_app:
-                self.logger.info("Signing MSI...", prefix=app.app_name)
+                self.console.info("Signing MSI...", prefix=app.app_name)
                 self.sign_file(
                     app=app,
                     filepath=self.distribution_path(app),
@@ -359,15 +376,15 @@ class WindowsPackageCommand(PackageCommand):
     def _package_msi(self, app):
         """Build the msi installer."""
 
-        self.logger.info("Building MSI...", prefix=app.app_name)
+        self.console.info("Building MSI...", prefix=app.app_name)
         try:
-            self.logger.info("Compiling application manifest...")
-            with self.input.wait_bar("Compiling..."):
+            self.console.info("Compiling application manifest...")
+            with self.console.wait_bar("Compiling..."):
                 self.tools.subprocess.run(
                     [
                         self.tools.wix.heat_exe,
                         "dir",
-                        os.fsdecode(self.packaging_root),
+                        self.packaging_root,
                         "-nologo",  # Don't display startup text
                         "-gg",  # Generate GUIDs
                         "-sfrag",  # Suppress fragment generation for directories
@@ -392,8 +409,8 @@ class WindowsPackageCommand(PackageCommand):
             ) from e
 
         try:
-            self.logger.info("Compiling application installer...")
-            with self.input.wait_bar("Compiling..."):
+            self.console.info("Compiling application installer...")
+            with self.console.wait_bar("Compiling..."):
                 self.tools.subprocess.run(
                     [
                         self.tools.wix.candle_exe,
@@ -415,8 +432,8 @@ class WindowsPackageCommand(PackageCommand):
             raise BriefcaseCommandError(f"Unable to compile app {app.app_name}.") from e
 
         try:
-            self.logger.info("Linking application installer...")
-            with self.input.wait_bar("Linking..."):
+            self.console.info("Linking application installer...")
+            with self.console.wait_bar("Linking..."):
                 self.tools.subprocess.run(
                     [
                         self.tools.wix.light_exe,
@@ -441,8 +458,8 @@ class WindowsPackageCommand(PackageCommand):
     def _package_zip(self, app):
         """Package the app as simple zip file."""
 
-        self.logger.info("Building zip file...", prefix=app.app_name)
-        with self.input.wait_bar("Packing..."):
+        self.console.info("Building zip file...", prefix=app.app_name)
+        with self.console.wait_bar("Packing..."):
             source = self.bundle_path(app) / self.packaging_root  # /src
             zip_root = f"{app.formal_name}-{app.version}"
 

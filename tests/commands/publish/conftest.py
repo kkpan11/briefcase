@@ -3,9 +3,8 @@ import pytest
 from briefcase.commands import PublishCommand
 from briefcase.commands.base import full_options
 from briefcase.config import AppConfig
-from briefcase.console import Console, Log
 
-from ...utils import create_file
+from ...utils import DummyConsole, create_file
 
 
 class DummyPublishCommand(PublishCommand):
@@ -20,8 +19,7 @@ class DummyPublishCommand(PublishCommand):
     description = "Dummy publish command"
 
     def __init__(self, *args, **kwargs):
-        kwargs.setdefault("logger", Log())
-        kwargs.setdefault("console", Console())
+        kwargs.setdefault("console", DummyConsole())
         super().__init__(*args, apps={}, **kwargs)
 
         self.actions = []
@@ -104,6 +102,7 @@ def first_app_config():
         version="0.0.1",
         description="The first simple app",
         sources=["src/first"],
+        license={"file": "LICENSE"},
     )
 
 
@@ -146,6 +145,7 @@ def second_app_config():
         version="0.0.2",
         description="The second simple app",
         sources=["src/second"],
+        license={"file": "LICENSE"},
     )
 
 

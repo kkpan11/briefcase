@@ -7,7 +7,7 @@ from unittest import mock
 import pytest
 import tomli_w
 
-from briefcase.console import Console, Log, LogLevel
+from briefcase.console import Console, LogLevel
 from briefcase.exceptions import (
     BriefcaseCommandError,
     NetworkFailure,
@@ -41,7 +41,6 @@ def first_app(first_app_config, tmp_path):
 @pytest.fixture
 def build_command(tmp_path, first_app_config):
     command = LinuxAppImageBuildCommand(
-        logger=Log(),
         console=Console(),
         base_path=tmp_path / "base_path",
         data_path=tmp_path / "briefcase",
@@ -51,12 +50,6 @@ def build_command(tmp_path, first_app_config):
     command.tools.host_arch = "x86_64"
     command.use_docker = False
     command.extra_docker_build_args = []
-    command._briefcase_toml[first_app_config] = {
-        "paths": {
-            "app_path": "First App.AppDir/usr/app",
-            "app_packages_path": "First App.AppDir/usr/app_packages",
-        }
-    }
 
     # Reset `os` mock without `spec` so tests can run on Windows where os.getuid doesn't exist.
     command.tools.os = mock.MagicMock()
@@ -99,14 +92,14 @@ def test_verify_tools_wrong_platform(build_command):
 
     build_command.tools.host_os = "TestOS"
     build_command.build_app = mock.MagicMock()
-    build_command.tools.download.file = mock.MagicMock()
+    build_command.tools.file.download = mock.MagicMock()
 
     # Try to invoke the build
     with pytest.raises(UnsupportedHostError):
         build_command()
 
     # The download was not attempted
-    assert build_command.tools.download.file.call_count == 0
+    assert build_command.tools.file.download.call_count == 0
 
     # But it failed, so the file won't be made executable...
     assert build_command.tools.os.chmod.call_count == 0
@@ -121,7 +114,7 @@ def test_verify_tools_download_failure(build_command):
     delattr(build_command.tools, "linuxdeploy")
 
     build_command.build_app = mock.MagicMock()
-    build_command.tools.download.file = mock.MagicMock(
+    build_command.tools.file.download = mock.MagicMock(
         side_effect=NetworkFailure("mock")
     )
 
@@ -130,7 +123,7 @@ def test_verify_tools_download_failure(build_command):
         build_command()
 
     # The download was attempted
-    build_command.tools.download.file.assert_called_with(
+    build_command.tools.file.download.assert_called_with(
         url="https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage",
         download_path=build_command.tools.base_path,
         role="linuxdeploy",
@@ -148,7 +141,7 @@ def test_build_appimage(build_command, first_app, debug_mode, tmp_path, sub_stre
     """A Linux app can be packaged as an AppImage."""
     # Enable verbose tool logging
     if debug_mode:
-        build_command.tools.logger.verbosity = LogLevel.DEEP_DEBUG
+        build_command.tools.console.verbosity = LogLevel.DEEP_DEBUG
 
     build_command.verify_app_tools(first_app)
     build_command.build_app(first_app)
@@ -542,7 +535,7 @@ def test_build_appimage_with_support_package_update(
     build_command.tools.shutil = mock.MagicMock(spec_set=shutil)
 
     # Mock downloads so we don't hit the network
-    build_command.tools.download = mock.MagicMock()
+    build_command.tools.file.download = mock.MagicMock()
 
     # Hard code a support revision so that the download support package is fixed,
     # and no linuxdeploy plugins.
@@ -558,11 +551,12 @@ def test_build_appimage_with_support_package_update(
     # Populate a briefcase.toml that mirrors a real Windows app
     with (build_command.bundle_path(first_app) / "briefcase.toml").open("wb") as f:
         index = {
+            "briefcase": {"target_version": "0.3.20"},
             "paths": {
                 "app_path": "First App.AppDir/usr/app",
                 "app_package_path": "First App.AppDir/usr/app_packages",
                 "support_path": "First App.AppDir/usr",
-            }
+            },
         }
         tomli_w.dump(index, f)
 

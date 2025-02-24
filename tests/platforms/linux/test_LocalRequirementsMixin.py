@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, call
 import pytest
 
 from briefcase.commands import CreateCommand
-from briefcase.console import Console, Log
+from briefcase.console import Console
 from briefcase.exceptions import BriefcaseCommandError
 from briefcase.integrations.docker import Docker, DockerAppContext
 from briefcase.integrations.subprocess import Subprocess
@@ -29,7 +29,6 @@ class DummyCreateCommand(LocalRequirementsMixin, CreateCommand):
 @pytest.fixture
 def no_docker_create_command(first_app_config, tmp_path):
     command = DummyCreateCommand(
-        logger=Log(),
         console=Console(),
         base_path=tmp_path / "base_path",
         data_path=tmp_path / "briefcase",
@@ -174,7 +173,6 @@ def test_install_app_requirements_in_docker(create_command, first_app_config, tm
             "pip",
             "install",
             "--disable-pip-version-check",
-            "--no-python-version-warning",
             "--upgrade",
             "--no-user",
             "--target=/app/path/to/app_packages",
@@ -233,7 +231,6 @@ def test_install_app_requirements_no_docker(
             "pip",
             "install",
             "--disable-pip-version-check",
-            "--no-python-version-warning",
             "--upgrade",
             "--no-user",
             f"--target={tmp_path / 'base_path/build/first-app/tester/dummy/path/to/app_packages'}",
@@ -334,7 +331,6 @@ def test_install_app_requirements_with_locals(
             "pip",
             "install",
             "--disable-pip-version-check",
-            "--no-python-version-warning",
             "--upgrade",
             "--no-user",
             "--target=/app/path/to/app_packages",

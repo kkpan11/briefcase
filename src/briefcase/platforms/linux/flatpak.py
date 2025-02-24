@@ -19,6 +19,7 @@ class LinuxFlatpakMixin(LinuxMixin):
     output_format = "flatpak"
     supported_host_os = {"Linux"}
     supported_host_os_reason = "Flatpaks can only be built on Linux."
+    platform_target_version = "0.3.20"
 
     def binary_path(self, app):
         # Flatpak doesn't really produce an identifiable "binary" as part of its
@@ -138,8 +139,6 @@ class LinuxFlatpakCreateCommand(LinuxFlatpakMixin, CreateCommand):
             "filesystem=xdg-config": True,
             "filesystem=xdg-data": True,
             "filesystem=xdg-documents": True,
-            # DBus access
-            "socket=session-bus": True,
         }
 
         finish_args.update(getattr(app, "finish_arg", {}))
@@ -165,13 +164,13 @@ class LinuxFlatpakBuildCommand(LinuxFlatpakMixin, BuildCommand):
 
         :param app: The application to build
         """
-        self.logger.info(
+        self.console.info(
             "Ensuring Flatpak runtime for the app is available...",
             prefix=app.app_name,
         )
         flatpak_repo_alias, flatpak_repo_url = self.flatpak_runtime_repo(app)
 
-        with self.input.wait_bar("Ensuring Flatpak runtime repo is registered..."):
+        with self.console.wait_bar("Ensuring Flatpak runtime repo is registered..."):
             self.tools.flatpak.verify_repo(
                 repo_alias=flatpak_repo_alias,
                 url=flatpak_repo_url,
@@ -187,8 +186,8 @@ class LinuxFlatpakBuildCommand(LinuxFlatpakMixin, BuildCommand):
             sdk=self.flatpak_sdk(app),
         )
 
-        self.logger.info("Building Flatpak...", prefix=app.app_name)
-        with self.input.wait_bar("Building..."):
+        self.console.info("Building Flatpak...", prefix=app.app_name)
+        with self.console.wait_bar("Building..."):
             self.tools.flatpak.build(
                 bundle_identifier=app.bundle_identifier,
                 app_name=app.app_name,
@@ -213,28 +212,43 @@ class LinuxFlatpakRunCommand(LinuxFlatpakMixin, RunCommand):
         :param passthrough: The list of arguments to pass to the app
         """
         # Set up the log stream
-        kwargs = self._prepare_app_env(app=app, test_mode=test_mode)
+        kwargs = self._prepare_app_kwargs(app=app, test_mode=test_mode)
 
         # Starting a flatpak has slightly different startup arguments; however,
         # the rest of the app startup process is the same. Transform the output
         # of the "default" behavior to be in flatpak format.
         if test_mode:
             kwargs = {"main_module": kwargs["env"]["BRIEFCASE_MAIN_MODULE"]}
+        else:
+            kwargs = {}
 
-        # Start the app in a way that lets us stream the logs
-        app_popen = self.tools.flatpak.run(
-            bundle_identifier=app.bundle_identifier,
-            args=passthrough,
-            **kwargs,
-        )
+        # Console apps must operate in non-streaming mode so that console input can
+        # be handled correctly. However, if we're in test mode, we *must* stream so
+        # that we can see the test exit sentinel
+        if app.console_app and not test_mode:
+            self.console.info("=" * 75)
+            self.tools.flatpak.run(
+                bundle_identifier=app.bundle_identifier,
+                args=passthrough,
+                stream_output=False,
+                **kwargs,
+            )
+        else:
+            # Start the app in a way that lets us stream the logs
+            app_popen = self.tools.flatpak.run(
+                bundle_identifier=app.bundle_identifier,
+                args=passthrough,
+                stream_output=True,
+                **kwargs,
+            )
 
-        # Start streaming logs for the app.
-        self._stream_app_logs(
-            app,
-            popen=app_popen,
-            test_mode=test_mode,
-            clean_output=False,
-        )
+            # Start streaming logs for the app.
+            self._stream_app_logs(
+                app,
+                popen=app_popen,
+                test_mode=test_mode,
+                clean_output=False,
+            )
 
 
 class LinuxFlatpakPackageCommand(LinuxFlatpakMixin, PackageCommand):
@@ -245,8 +259,8 @@ class LinuxFlatpakPackageCommand(LinuxFlatpakMixin, PackageCommand):
 
         :param app: The config object for the app
         """
-        self.logger.info("Building bundle...", prefix=app.app_name)
-        with self.input.wait_bar("Bundling..."):
+        self.console.info("Building bundle...", prefix=app.app_name)
+        with self.console.wait_bar("Bundling..."):
             _, flatpak_repo_url = self.flatpak_runtime_repo(app)
             self.tools.flatpak.bundle(
                 repo_url=flatpak_repo_url,

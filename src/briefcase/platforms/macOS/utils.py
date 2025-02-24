@@ -41,7 +41,7 @@ class AppPackagesMergeMixin:
             are in the install path that are non-universal and non-pure.
         """
         binary_packages = []
-        for distinfo in install_path.glob("**/*.dist-info"):
+        for distinfo in install_path.glob("*.dist-info"):
             # Read the WHEEL file in the dist-info folder.
             # Use this to determine if the wheel is "pure", and the tag
             # for the wheel.
@@ -85,11 +85,11 @@ class AppPackagesMergeMixin:
             ) from e
         else:
             if output.startswith("Non-fat file: "):
-                self.logger.verbose(f"{path} is already thin.")
+                self.console.verbose(f"{path} is already thin.")
             elif output.startswith("Architectures in the fat file: "):
                 architectures = set(output.strip().split(":")[-1].strip().split(" "))
                 if arch in architectures:
-                    self.logger.verbose(f"Thinning {path}")
+                    self.console.verbose(f"Thinning {path}")
                     try:
                         thin_lib_path = path.parent / f"{path.name}.{arch}"
                         self.tools.subprocess.run(
@@ -127,7 +127,7 @@ class AppPackagesMergeMixin:
         :param target_path: The root location where the fat library will be written
         :param sources: A list of root locations providing single platform libraries.
         """
-        self.logger.verbose(f"Creating fat library {relative_path}")
+        self.console.verbose(f"Creating fat library {relative_path}")
 
         try:
             # Ensure the directory where the library will be written exists.
@@ -171,11 +171,13 @@ class AppPackagesMergeMixin:
         # Call lipo on each dylib that was found to ensure it is thin.
         if dylibs:
             # Do this in a threadpool to make it run faster.
-            progress_bar = self.input.progress_bar()
-            self.logger.info(f"Thinning libraries in {app_packages.name}...")
+            progress_bar = self.console.progress_bar()
+            self.console.info(f"Thinning libraries in {app_packages.name}...")
             task_id = progress_bar.add_task("Create fat libraries", total=len(dylibs))
             with progress_bar:
-                with concurrent.futures.ThreadPoolExecutor() as executor:
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=1 if self.console.is_deep_debug else None
+                ) as executor:
                     futures = []
                     for path in dylibs:
                         future = executor.submit(
@@ -189,7 +191,7 @@ class AppPackagesMergeMixin:
                         if future.exception():
                             raise future.exception()
         else:
-            self.logger.info("No libraries require thinning.")
+            self.console.info("No libraries require thinning.")
 
     def merge_app_packages(
         self,
@@ -216,7 +218,7 @@ class AppPackagesMergeMixin:
         dylibs = set()
         digests = {}
         for source_app_packages in sources:
-            with self.input.wait_bar(f"Merging {source_app_packages.name}..."):
+            with self.console.wait_bar(f"Merging {source_app_packages.name}..."):
                 for source_path in source_app_packages.glob("**/*"):
                     relative_path = source_path.relative_to(source_app_packages)
                     target_path = target_app_packages / relative_path
@@ -235,7 +237,7 @@ class AppPackagesMergeMixin:
                                 relative_path.parent.name == "__pycache__"
                                 or Path(relative_path.parts[0]).suffix == ".dist-info"
                             ):
-                                self.logger.warning(
+                                self.console.warning(
                                     f"{relative_path} has different content "
                                     f"between sources; ignoring {source_app_packages.suffix[1:]} version."
                                 )
@@ -248,11 +250,13 @@ class AppPackagesMergeMixin:
         # Call lipo on each dylib that was found to create the fat version.
         if dylibs:
             # Do this in a threadpool to make it run faster.
-            progress_bar = self.input.progress_bar()
-            self.logger.info("Merging libraries...")
+            progress_bar = self.console.progress_bar()
+            self.console.info("Merging libraries...")
             task_id = progress_bar.add_task("Create fat libraries", total=len(dylibs))
             with progress_bar:
-                with concurrent.futures.ThreadPoolExecutor() as executor:
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=1 if self.console.is_deep_debug else None
+                ) as executor:
                     futures = []
                     for relative_path in dylibs:
                         future = executor.submit(
@@ -267,4 +271,4 @@ class AppPackagesMergeMixin:
                         if future.exception():
                             raise future.exception()
         else:
-            self.logger.info("No libraries require merging.")
+            self.console.info("No libraries require merging.")
