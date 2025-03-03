@@ -4,21 +4,22 @@ import contextlib
 import json
 import operator
 import os
+import queue
 import shlex
 import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from functools import wraps
 from pathlib import Path
 from subprocess import CompletedProcess
-from typing import Iterator, Mapping, Sequence, TypeVar, Union
+from typing import TypeVar, Union
 
 import psutil
 
 from briefcase.config import AppConfig
-from briefcase.console import Log
+from briefcase.console import Console, LogLevel
 from briefcase.exceptions import CommandOutputParseError, ParseError
 from briefcase.integrations.base import Tool, ToolCache
 
@@ -52,11 +53,11 @@ def is_process_dead(pid: int) -> bool:
     """Returns True if a PID is not assigned to a process.
 
     Checking if a PID exists is only a semi-safe proxy to determine if a process is dead
-    since PIDs can be re-used. Therefore, this function should only be used via constant
+    since PIDs can be reused. Therefore, this function should only be used via constant
     monitoring of a PID to identify when the process goes from existing to not existing.
 
     :param pid: integer value to be checked if assigned as a PID.
-    :return: True if PID does not exist; False otherwise.
+    :returns: True if PID does not exist; False otherwise.
     """
     return not psutil.pid_exists(pid)
 
@@ -64,7 +65,7 @@ def is_process_dead(pid: int) -> bool:
 def get_process_id_by_command(
     command_list: list[str] | None = None,
     command: str = "",
-    logger: Log | None = None,
+    console: Console | None = None,
 ) -> int | None:
     """Find a Process ID (PID) a by its command. If multiple processes are found, then
     the most recently created process ID is returned.
@@ -74,8 +75,8 @@ def get_process_id_by_command(
         This is primarily intended for use on macOS where the `open` command
         takes a filepath to a directory for an application; therefore, the actual
         running process will be running a command within that directory.
-    :param logger: optional Log to show messages about process matching to users
-    :return: PID if found else None
+    :param console: optional console to show messages about process matching to users
+    :returns: PID if found else None
     """
     matching_procs = []
     # retrieve command line, creation time, and ID for all running processes.
@@ -93,8 +94,8 @@ def get_process_id_by_command(
     elif len(matching_procs) > 1:
         # return the ID of the most recently created matching process
         pid = sorted(matching_procs, key=operator.itemgetter("create_time"))[-1]["pid"]
-        if logger:
-            logger.info(
+        if console:
+            console.info(
                 f"Multiple running instances of app found. Using most recently created app process {pid}."
             )
         return pid
@@ -116,10 +117,10 @@ def ensure_console_is_safe(sub_method):
 
         :param sub: Bound Subprocess object
         :param args: command line to run in subprocess
-        :return: the return value for the Subprocess method
+        :returns: the return value for the Subprocess method
         """
         # Just run the command if no dynamic elements are active
-        if not sub.tools.input.is_console_controlled:
+        if not sub.tools.console.is_console_controlled:
             return sub_method(sub, args, *wrapped_args, **wrapped_kwargs)
 
         remove_dynamic_elements = False
@@ -137,12 +138,127 @@ def ensure_console_is_safe(sub_method):
 
         # Run subprocess command with or without console control
         if remove_dynamic_elements:
-            with sub.tools.input.release_console_control():
+            with sub.tools.console.release_console_control():
                 return sub_method(sub, args, *wrapped_args, **wrapped_kwargs)
         else:
             return sub_method(sub, args, *wrapped_args, **wrapped_kwargs)
 
     return inner
+
+
+class PopenOutputStreamer(threading.Thread):
+    def __init__(
+        self,
+        label: str,
+        popen_process: subprocess.Popen,
+        console: Console,
+        capture_output: bool = False,
+        filter_func: Callable[[str], Iterator[str]] | None = None,
+    ):
+        """Thread for streaming stdout for a Popen process.
+
+        :param label: Descriptive name for process being streamed
+        :param popen_process: Popen process with stdout to stream
+        :param console: console for printing to console
+        :param capture_output: Retain process output in ``output_queue`` via a
+            ``queue.Queue`` instead of printing to console
+        :param filter_func: a callable that will be invoked on every line of output
+            that is streamed; see ``Subprocess.stream_output`` for details
+        """
+        super().__init__(name=f"{label} output streamer", daemon=True)
+
+        self.popen_process = popen_process
+        self.console = console
+        self.capture_output = capture_output
+        self.filter_func = filter_func
+
+        # arbitrarily large maxsize to prevent unbounded memory use if things go south
+        self.output_queue = queue.Queue(maxsize=10_000_000)
+        self.stop_flag = threading.Event()
+
+    def run(self):
+        """Stream output for a Popen process."""
+        try:
+            while output_line := self._readline():
+                # The stop_flag is intentionally checked both at the top and bottom of
+                # this loop; if the flag was set during the call to readline(), then
+                # processing the output is skipped altogether. And if the flag is set
+                # as a consequence of filter_func(), the streamer still exits before
+                # calling readline() again and potentially blocking indefinitely.
+                if not self.stop_flag.is_set():
+                    filtered_output, stop_streaming = self._filter(output_line)
+
+                    for filtered_line in filtered_output:
+                        if self.capture_output:
+                            self.output_queue.put_nowait(filtered_line)
+                        else:
+                            self.console.info(filtered_line)
+
+                    if stop_streaming:
+                        self.stop_flag.set()
+
+                if self.stop_flag.is_set():
+                    break
+        except Exception as e:
+            self.console.error(f"Error while streaming output: {type(e).__name__}: {e}")
+            self.console.capture_stacktrace("Output thread")
+
+    def request_stop(self):
+        """Set the stop flag to cause the streamer to exit.
+
+        If the streamer is currently blocking on `readline()` because the process'
+        stdout buffer is empty, then the streamer will not exit until `readline()`
+        returns or until Briefcase exits.
+        """
+        self.stop_flag.set()
+
+    @property
+    def captured_output(self) -> str:
+        """The captured output from the process."""
+        output = []
+        while not self.output_queue.empty():
+            with contextlib.suppress(queue.Empty):
+                output.append(self.output_queue.get_nowait())
+                self.output_queue.task_done()
+        return "".join(output)
+
+    def _readline(self) -> str:
+        """Read a line of output from the process while blocking.
+
+        Calling readline() for stdout always returns at least a newline, i.e. "\n",
+        UNLESS the process is exiting or already exited; in that case, an empty string
+        is returned.
+
+        :returns: one line of output or "" if nothing more can be read from stdout
+        """
+        try:
+            return ensure_str(self.popen_process.stdout.readline())
+        except ValueError as e:
+            # Catch ValueError if stdout is unexpectedly closed; this can
+            # happen, for instance, if the user starts spamming CTRL+C.
+            if "I/O operation on closed file" in str(e):
+                self.console.warning(
+                    "WARNING: stdout was unexpectedly closed while streaming output"
+                )
+                return ""
+            else:
+                raise
+
+    def _filter(self, line: str) -> tuple[list[str], bool]:
+        """Run filter function over output from process."""
+        filtered_output = []
+        stop_streaming = False
+
+        if self.filter_func is not None:
+            try:
+                for filtered_line in self.filter_func(line.strip("\n")):
+                    filtered_output.append(filtered_line)
+            except StopStreaming:
+                stop_streaming = True
+        else:
+            filtered_output.append(line)
+
+        return filtered_output, stop_streaming
 
 
 class NativeAppContext(Tool):
@@ -186,8 +302,11 @@ class Subprocess(Tool):
         # This is a no-op; the native subprocess environment is ready-to-use.
         yield subprocess_kwargs
 
-    def full_env(self, overrides: dict[str, str]) -> dict[str, str]:
+    def full_env(self, overrides: dict[str, str | None] | None) -> dict[str, str]:
         """Generate the full environment in which the command will run.
+
+        If an env var in `overrides` is set to `None`, then that env var
+        will be altogether absent in the returned environment.
 
         :param overrides: The environment passed to the subprocess call;
             can be `None` if there are no explicit environment changes.
@@ -195,6 +314,7 @@ class Subprocess(Tool):
         env = self.tools.os.environ.copy()
         if overrides:
             env.update(overrides)
+            env = {k: v for k, v in env.items() if v is not None}
         return env
 
     def final_kwargs(self, **kwargs) -> dict[str, str]:
@@ -409,7 +529,7 @@ class Subprocess(Tool):
             user. Can raise StopStreaming to terminate the output stream.
         :param kwargs: keyword args for ``subprocess.run()``
         :raises ValueError: if a filter function is provided when in non-streaming mode.
-        :return: ``CompletedProcess`` for invoked process
+        :returns: ``CompletedProcess`` for invoked process
         """
 
         # Stream the output unless the caller explicitly disables it. When a
@@ -451,7 +571,7 @@ class Subprocess(Tool):
         be captured for logging.
 
         When dynamic screen content like a Wait Bar is active, output can
-        only be printed to the screen via Log or Console to avoid interfering
+        only be printed to the screen via Console to avoid interfering
         with and likely corrupting the updates to the dynamic screen elements.
 
         stdout will always be piped so it can be printed to the screen;
@@ -497,31 +617,33 @@ class Subprocess(Tool):
         return subprocess.CompletedProcess(args, return_code, stderr=stderr)
 
     @ensure_console_is_safe
-    def check_output(self, args: SubprocessArgsT, quiet: bool = False, **kwargs) -> str:
+    def check_output(self, args: SubprocessArgsT, quiet: int = 0, **kwargs) -> str:
         """A wrapper for subprocess.check_output()
 
-        The behavior of this method is identical to
-        subprocess.check_output(), except for:
-         - If the `env` is argument provided, the current system environment
-           will be copied, and the contents of env overwritten into that
-           environment.
-         - The `text` argument is defaulted to True so all output
-           is returned as strings instead of bytes.
-         - The `stderr` argument is defaulted to `stdout` so _all_ output is
-           returned and `stderr` isn't unexpectedly printed to the console.
+        The behavior of this method is identical to subprocess.check_output(), except
+        for:
+         - If the `env` is argument provided, the current system environment will be
+           copied, and the contents of env overwritten into that environment.
+         - The `text` argument is defaulted to True so all output is returned as strings
+           instead of bytes.
+         - The `stderr` argument is defaulted to `stdout` so _all_ output is returned
+           and `stderr` isn't unexpectedly printed to the console.
 
         :param args: commands and its arguments to run via subprocess
-        :param quiet: Should the invocation of this command be silent, and
-            *not* appear in the logs? This should almost always be False;
-            however, for some calls (most notably, calls that are called
-            frequently to evaluate the status of another process), logging can
-            be turned off so that log output isn't corrupted by thousands of
-            polling calls.
+        :param quiet: Should the invocation of this command be silent, and *not* appear
+            in the logs? This should almost always be 0, indicating "not quiet"; any
+            command output will be logged, and any errors will be logged *and* printed
+            to the console. A value of 1 will log all command output, but errors will be
+            logged, but *not* printed to the console. A value of 2 will *not* log any
+            command output; errors will be logged, but *not* printed to the console. A
+            value of 2 is mostly useful for calls that are called frequently to evaluate
+            the status of another process (such as calls that poll an API) so that log
+            output isn't corrupted by thousands of polling calls.
         """
         # if stderr isn't explicitly redirected, then send it to stdout.
         kwargs.setdefault("stderr", subprocess.STDOUT)
 
-        if not quiet:
+        if quiet < 2:
             self._log_command(args)
             self._log_cwd(kwargs.get("cwd"))
             self._log_environment(kwargs.get("env"))
@@ -531,12 +653,17 @@ class Subprocess(Tool):
                 [str(arg) for arg in args], **self.final_kwargs(**kwargs)
             )
         except subprocess.CalledProcessError as e:
-            if not quiet:
+            # Subprocess errors will be logged, and also printed to console if we're at
+            # DEBUG+ log levels. However, if we're at quiet=0 *and* a non-debug log
+            # level, we need to explicitly output to the console.
+            if quiet == 0 and self.tools.console.verbosity < LogLevel.DEBUG:
+                self.output_error(e)
+            if quiet < 2:
                 self._log_output(e.output, e.stderr)
                 self._log_return_code(e.returncode)
             raise
 
-        if not quiet:
+        if quiet < 2:
             self._log_output(cmd_output)
             self._log_return_code(0)
         return cmd_output
@@ -569,16 +696,16 @@ class Subprocess(Tool):
                 str(e)
                 or f"Failed to parse command output using '{output_parser.__name__}'"
             )
-            self.tools.logger.error()
-            self.tools.logger.error("Command Output Parsing Error:")
-            self.tools.logger.error(f"    {error_reason}")
-            self.tools.logger.error("Command:")
-            self.tools.logger.error(
+            self.tools.console.error()
+            self.tools.console.error("Command Output Parsing Error:")
+            self.tools.console.error(f"    {error_reason}")
+            self.tools.console.error("Command:")
+            self.tools.console.error(
                 f"    {' '.join(shlex.quote(str(arg)) for arg in args)}"
             )
-            self.tools.logger.error("Command Output:")
+            self.tools.console.error("Command Output:")
             for line in ensure_str(cmd_output).splitlines():
-                self.tools.logger.error(f"    {line}")
+                self.tools.console.error(f"    {line}")
             raise CommandOutputParseError(error_reason) from e
 
     def Popen(self, args: SubprocessArgsT, **kwargs) -> subprocess.Popen:
@@ -617,19 +744,19 @@ class Subprocess(Tool):
         :param label: A description of the content being streamed; used for to provide
             context in logging messages.
         :param popen_process: a running Popen process with output to print
-        :param stop_func: a Callable that returns True when output streaming should stop
+        :param stop_func: A Callable that returns True when output streaming should stop
             and the popen_process should be terminated.
-        :param filter_func: a callable that will be invoked on every line of output that
+        :param filter_func: A callable that will be invoked on every line of output that
             is streamed. The function accepts the "raw" line of input (stripped of any
             trailing newline); it returns a generator that yields the filtered output
             that should be displayed to the user. Can raise StopStreaming to terminate
             the output stream.
         """
-        output_streamer = threading.Thread(
-            name=f"{label} output streamer",
-            target=self._stream_output_thread,
-            args=(popen_process, filter_func),
-            daemon=True,
+        output_streamer = PopenOutputStreamer(
+            label=label,
+            popen_process=popen_process,
+            console=self.tools.console,
+            filter_func=filter_func,
         )
         try:
             output_streamer.start()
@@ -638,7 +765,7 @@ class Subprocess(Tool):
             while not stop_func() and output_streamer.is_alive():
                 time.sleep(0.1)
         except KeyboardInterrupt:
-            self.tools.logger.info("Stopping...")
+            self.tools.console.info("Stopping...")
             # allow time for CTRL+C to propagate to the child process
             time.sleep(0.25)
             # re-raise to exit as "Aborted by user"
@@ -649,56 +776,43 @@ class Subprocess(Tool):
             while output_streamer.is_alive() and time.time() < streamer_deadline:
                 time.sleep(0.1)
             if output_streamer.is_alive():
-                self.tools.logger.error(
+                self.tools.console.error(
                     "Log stream hasn't terminated; log output may be corrupted."
                 )
 
-    def _stream_output_thread(
+    def stream_output_non_blocking(
         self,
-        popen_process: subprocess.Popen,
-        filter_func: Callable[[str], Iterator[str]],
-    ):
-        """Stream output for a Popen process in a Thread.
+        label: str,
+        popen_process: Popen,
+        capture_output: bool = False,
+        filter_func: Callable[[str], Iterator[str]] | None = None,
+    ) -> PopenOutputStreamer:
+        """Stream the output of a Popen process without blocking.
 
-        :param popen_process: popen process to stream stdout
-        :param filter_func: a callable that will be invoked on every line
-            of output that is streamed; see ``stream_output`` for details.
+        This is useful for streaming or capturing the output of a process in the
+        background. In this way, the process' output can be shown to users while the
+        main thread monitors other activities; alternatively, the output of the process
+        can be captured to be retrieved later in the event of an error, for instance.
+
+        :param label: A description of the content being streamed; used for to provide
+            context in logging messages.
+        :param popen_process: A running Popen process with output to print
+        :param capture_output: Retain process output instead of printing to the console
+        :param filter_func: A callable that will be invoked on every line of output that
+            is streamed. The function accepts the "raw" line of input (stripped of any
+            trailing newline); it returns a generator that yields the filtered output
+            that should be displayed to the user. Can raise StopStreaming to terminate
+            the output stream.
         """
-        try:
-            while True:
-                try:
-                    output_line = ensure_str(popen_process.stdout.readline())
-                except ValueError as e:
-                    # Catch ValueError if stdout is unexpectedly closed; this can
-                    # happen, for instance, if the user starts spamming CTRL+C.
-                    if "I/O operation on closed file" in str(e):
-                        self.tools.logger.warning(
-                            "WARNING: stdout was unexpectedly closed while streaming output"
-                        )
-                        return
-                    else:
-                        raise
-
-                # readline should always return at least a newline (ie \n) UNLESS
-                # the underlying process is exiting/gone; then "" is returned.
-                if output_line:
-                    if filter_func is not None:
-                        try:
-                            for filtered_output in filter_func(
-                                output_line.rstrip("\n")
-                            ):
-                                self.tools.logger.info(filtered_output)
-                        except StopStreaming:
-                            return
-                    else:
-                        self.tools.logger.info(output_line)
-                else:
-                    return
-        except Exception as e:
-            self.tools.logger.error(
-                f"Error while streaming output: {e.__class__.__name__}: {e}"
-            )
-            self.tools.logger.capture_stacktrace("Output thread")
+        output_streamer = PopenOutputStreamer(
+            label=label,
+            popen_process=popen_process,
+            console=self.tools.console,
+            capture_output=capture_output,
+            filter_func=filter_func,
+        )
+        output_streamer.start()
+        return output_streamer
 
     def cleanup(self, label: str, popen_process: subprocess.Popen):
         """Clean up after a Popen process, gracefully terminating if possible; forcibly
@@ -712,18 +826,25 @@ class Subprocess(Tool):
         try:
             popen_process.wait(timeout=3)
         except subprocess.TimeoutExpired:
-            self.tools.logger.warning(f"Forcibly killing {label}...")
+            self.tools.console.warning(f"Forcibly killing {label}...")
             popen_process.kill()
+
+    def _console(self, msg: str = ""):
+        """Funnel for subprocess console-only logging."""
+        self.tools.console.to_console(msg, style="dim")
 
     def _log(self, msg: str = ""):
         """Funnel for all subprocess details logging."""
-        self.tools.logger.debug(msg, preface=">>> " if msg else "")
+        self.tools.console.debug(msg, preface=">>> " if msg else "")
 
-    def _log_command(self, args: SubprocessArgsT):
+    def _log_command(self, args: SubprocessArgsT, handler=None):
         """Log the entire console command being executed."""
-        self._log()
-        self._log("Running Command:")
-        self._log(f"    {' '.join(shlex.quote(str(arg)) for arg in args)}")
+        if handler is None:
+            handler = self._log
+
+        handler()
+        handler("Running Command:")
+        handler(f"    {' '.join(shlex.quote(str(arg)) for arg in args)}")
 
     def _log_cwd(self, cwd: str | Path | None):
         """Log the working directory for the command being executed."""
@@ -742,18 +863,36 @@ class Subprocess(Tool):
             for env_var, value in overrides.items():
                 self._log(f"    {env_var}={value}")
 
-    def _log_output(self, output: str, stderr: str | None = None):
+    def _log_output(self, output: str, stderr: str | None = None, handler=None):
         """Log the output of the executed command."""
+        if handler is None:
+            handler = self._log
+
         if output:
-            self._log("Command Output:")
+            handler("Command Output:")
             for line in ensure_str(output).splitlines():
-                self._log(f"    {line}")
+                handler(f"    {line}")
 
         if stderr:
-            self._log("Command Error Output (stderr):")
+            handler("Command Error Output (stderr):")
             for line in ensure_str(stderr).splitlines():
-                self._log(f"    {line}")
+                handler(f"    {line}")
 
-    def _log_return_code(self, return_code: int | str):
+    def _log_return_code(self, return_code: int | str, handler=None):
         """Log the output value of the executed command."""
-        self._log(f"Return code: {return_code}")
+        if handler is None:
+            handler = self._log
+        handler(f"Return code: {return_code}")
+        handler()
+
+    def output_error(self, exception: subprocess.CalledProcessException):
+        """Print error from a subprocess to the console.
+
+        This will output the command, output and return code to the console,
+        but *not* to the log.
+
+        :param exception: The raw exception raised by a subprocess
+        """
+        self._log_command(exception.cmd, handler=self._console)
+        self._log_output(exception.output, exception.stderr, handler=self._console)
+        self._log_return_code(exception.returncode, handler=self._console)

@@ -6,10 +6,9 @@ import pytest
 from briefcase.commands import OpenCommand
 from briefcase.commands.base import full_options
 from briefcase.config import AppConfig
-from briefcase.console import Console, Log
 from briefcase.integrations.subprocess import Subprocess
 
-from ...utils import create_file
+from ...utils import DummyConsole, create_file
 
 
 class DummyOpenCommand(OpenCommand):
@@ -24,8 +23,7 @@ class DummyOpenCommand(OpenCommand):
     description = "Dummy Open command"
 
     def __init__(self, *args, apps, **kwargs):
-        kwargs.setdefault("logger", Log())
-        kwargs.setdefault("console", Console())
+        kwargs.setdefault("console", DummyConsole())
         super().__init__(*args, apps=apps, **kwargs)
 
         # Override the OS services that are used when opening
@@ -89,6 +87,7 @@ def open_command(tmp_path):
                 version="0.0.1",
                 description="The first simple app",
                 sources=["src/first"],
+                license={"file": "LICENSE"},
             ),
             "second": AppConfig(
                 app_name="second",
@@ -96,6 +95,7 @@ def open_command(tmp_path):
                 version="0.0.2",
                 description="The second simple app",
                 sources=["src/second"],
+                license={"file": "LICENSE"},
             ),
         },
     )

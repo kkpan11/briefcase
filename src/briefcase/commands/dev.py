@@ -86,7 +86,7 @@ class DevCommand(RunAppMixin, BaseCommand):
             requires.extend(app.test_requires)
 
         if requires:
-            with self.input.wait_bar("Installing dev requirements..."):
+            with self.console.wait_bar("Installing dev requirements..."):
                 try:
                     self.tools.subprocess.run(
                         [
@@ -99,14 +99,16 @@ class DevCommand(RunAppMixin, BaseCommand):
                             "install",
                             "--upgrade",
                         ]
-                        + requires,
+                        + (["-vv"] if self.console.is_deep_debug else [])
+                        + requires
+                        + app.requirement_installer_args,
                         check=True,
                         encoding="UTF-8",
                     )
                 except subprocess.CalledProcessError as e:
                     raise RequirementsInstallError() from e
         else:
-            self.logger.info("No application requirements.")
+            self.console.info("No application requirements.")
 
     def run_dev_app(
         self,
@@ -128,33 +130,49 @@ class DevCommand(RunAppMixin, BaseCommand):
         # Add in the environment settings to get Python in the state we want.
         env.update(self.DEV_ENVIRONMENT)
 
-        app_popen = self.tools.subprocess.Popen(
-            [
-                # Do not add additional switches for sys.executable; see DEV_ENVIRONMENT
-                sys.executable,
-                "-c",
-                (
-                    "import runpy, sys;"
-                    "sys.path.pop(0);"
-                    f"sys.argv.extend({passthrough!r});"
-                    f'runpy.run_module("{main_module}", run_name="__main__", alter_sys=True)'
-                ),
-            ],
-            env=env,
-            encoding="UTF-8",
-            cwd=self.tools.home_path,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            bufsize=1,
-        )
+        cmdline = [
+            # Do not add additional switches for sys.executable; see DEV_ENVIRONMENT
+            sys.executable,
+            "-c",
+            (
+                "import runpy, sys;"
+                "sys.path.pop(0);"
+                f"sys.argv.extend({passthrough!r});"
+                f'runpy.run_module("{main_module}", run_name="__main__", alter_sys=True)'
+            ),
+        ]
 
-        # Start streaming logs for the app.
-        self._stream_app_logs(
-            app,
-            popen=app_popen,
-            test_mode=test_mode,
-            clean_output=False,
-        )
+        # Console apps must operate in non-streaming mode so that console input can
+        # be handled correctly. However, if we're in test mode, we *must* stream so
+        # that we can see the test exit sentinel
+        if app.console_app and not test_mode:
+            self.console.info("=" * 75)
+            self.tools.subprocess.run(
+                cmdline,
+                env=env,
+                encoding="UTF-8",
+                cwd=self.tools.home_path,
+                bufsize=1,
+                stream_output=False,
+            )
+        else:
+            app_popen = self.tools.subprocess.Popen(
+                cmdline,
+                env=env,
+                encoding="UTF-8",
+                cwd=self.tools.home_path,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+            )
+
+            # Start streaming logs for the app.
+            self._stream_app_logs(
+                app,
+                popen=app_popen,
+                test_mode=test_mode,
+                clean_output=False,
+            )
 
     def get_environment(self, app, test_mode: bool):
         # Create a shell environment where PYTHONPATH points to the source
@@ -170,6 +188,10 @@ class DevCommand(RunAppMixin, BaseCommand):
         # https://github.com/pythonnet/pythonnet/issues/1977 for details.
         if self.platform == "windows":  # pragma: no branch
             env["PYTHONMALLOC"] = "default"  # pragma: no-cover-if-not-windows
+
+        # If we're in verbose mode, put BRIEFCASE_DEBUG into the environment
+        if self.console.is_debug:
+            env["BRIEFCASE_DEBUG"] = "1"
 
         return env
 
@@ -216,17 +238,17 @@ class DevCommand(RunAppMixin, BaseCommand):
             # If we are not running the app, it means we should update requirements.
             update_requirements = True
         if update_requirements or not dist_info_path.exists():
-            self.logger.info("Installing requirements...", prefix=app.app_name)
+            self.console.info("Installing requirements...", prefix=app.app_name)
             self.install_dev_requirements(app, **options)
             write_dist_info(app, dist_info_path)
 
         if run_app:
             if test_mode:
-                self.logger.info(
+                self.console.info(
                     "Running test suite in dev environment...", prefix=app.app_name
                 )
             else:
-                self.logger.info("Starting in dev mode...", prefix=app.app_name)
+                self.console.info("Starting in dev mode...", prefix=app.app_name)
             env = self.get_environment(app, test_mode=test_mode)
             return self.run_dev_app(
                 app,

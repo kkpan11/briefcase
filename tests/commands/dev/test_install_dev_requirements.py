@@ -3,11 +3,16 @@ from subprocess import CalledProcessError
 
 import pytest
 
+from briefcase.console import LogLevel
 from briefcase.exceptions import RequirementsInstallError
 
 
-def test_install_requirements_no_error(dev_command, first_app):
+@pytest.mark.parametrize("logging_level", [LogLevel.INFO, LogLevel.DEEP_DEBUG])
+def test_install_requirements_no_error(dev_command, first_app, logging_level):
     """Ensure run is executed properly to install requirements."""
+    # Configure logging level
+    dev_command.console.verbosity = logging_level
+
     first_app.requires = ["package-one", "package_two", "packagethree"]
 
     dev_command.install_dev_requirements(app=first_app)
@@ -22,10 +27,9 @@ def test_install_requirements_no_error(dev_command, first_app):
             "pip",
             "install",
             "--upgrade",
-            "package-one",
-            "package_two",
-            "packagethree",
-        ],
+        ]
+        + (["-vv"] if logging_level == LogLevel.DEEP_DEBUG else [])
+        + ["package-one", "package_two", "packagethree"],
         check=True,
         encoding="UTF-8",
     )
@@ -67,6 +71,17 @@ def test_install_requirements_error(dev_command, first_app):
 def test_no_requirements(dev_command, first_app):
     """Ensure dependency installation is not attempted when nothing to install."""
     first_app.requires = []
+
+    dev_command.install_dev_requirements(app=first_app)
+
+    dev_command.tools.subprocess.run.assert_not_called()
+
+
+def test_no_requirements_with_requirement_installer_Args(dev_command, first_app):
+    """Ensure dependency installation is not attempted when nothing to install,
+    even if requirement installer args are defined."""
+    first_app.requires = []
+    first_app.requirement_installer_args = ["--no-cache"]
 
     dev_command.install_dev_requirements(app=first_app)
 
@@ -120,6 +135,32 @@ def test_only_test_requirements(dev_command, first_app):
             "--upgrade",
             "test-one",
             "test_two",
+        ],
+        check=True,
+        encoding="UTF-8",
+    )
+
+
+def test_requirement_installer_args(dev_command, first_app):
+    """If an app has requirement installer args, they're used correctly."""
+    first_app.requires = ["one", "two"]
+    first_app.requirement_installer_args = ["--no-cache"]
+
+    dev_command.install_dev_requirements(app=first_app)
+
+    dev_command.tools.subprocess.run.assert_called_once_with(
+        [
+            sys.executable,
+            "-u",
+            "-X",
+            "utf8",
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            "one",
+            "two",
+            "--no-cache",
         ],
         check=True,
         encoding="UTF-8",

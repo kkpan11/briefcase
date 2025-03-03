@@ -1,10 +1,8 @@
-import os
 import subprocess
 from unittest.mock import ANY, MagicMock
 
 import pytest
 
-from briefcase.console import Console
 from briefcase.exceptions import BriefcaseCommandError
 from briefcase.integrations.android_sdk import AndroidSDK
 from briefcase.integrations.base import ToolCache
@@ -12,7 +10,6 @@ from briefcase.integrations.base import ToolCache
 
 @pytest.fixture
 def mock_tools(tmp_path, mock_tools) -> ToolCache:
-    mock_tools.input = MagicMock(spec_set=Console)
 
     # For default test purposes, assume we're on macOS x86_64
     mock_tools.host_os = "Darwin"
@@ -88,7 +85,7 @@ def test_create_emulator(
     # avdmanager was invoked
     mock_tools.subprocess.check_output.assert_called_once_with(
         [
-            os.fsdecode(android_sdk.avdmanager_path),
+            android_sdk.avdmanager_path,
             "--verbose",
             "create",
             "avd",
@@ -101,7 +98,10 @@ def test_create_emulator(
             "--device",
             "slab",
         ],
-        env=android_sdk.env,
+        env={
+            **android_sdk.env,
+            **{"XDG_CONFIG_HOME": None},
+        },
     )
 
     # Emulator configuration file has been appended.
@@ -161,7 +161,7 @@ def test_create_emulator_with_defaults(
     # avdmanager was invoked
     mock_tools.subprocess.check_output.assert_called_once_with(
         [
-            os.fsdecode(android_sdk.avdmanager_path),
+            android_sdk.avdmanager_path,
             "--verbose",
             "create",
             "avd",
@@ -174,7 +174,10 @@ def test_create_emulator_with_defaults(
             "--device",
             "pixel",
         ],
-        env=android_sdk.env,
+        env={
+            **android_sdk.env,
+            **{"XDG_CONFIG_HOME": None},
+        },
     )
 
     # Emulator configuration file has been appended.
@@ -208,7 +211,7 @@ def test_create_failure(mock_tools, android_sdk):
     # avdmanager was invoked
     mock_tools.subprocess.check_output.assert_called_once_with(
         [
-            os.fsdecode(android_sdk.avdmanager_path),
+            android_sdk.avdmanager_path,
             "--verbose",
             "create",
             "avd",
@@ -221,7 +224,10 @@ def test_create_failure(mock_tools, android_sdk):
             "--device",
             "pixel",
         ],
-        env=android_sdk.env,
+        env={
+            **android_sdk.env,
+            **{"XDG_CONFIG_HOME": None},
+        },
     )
 
 
@@ -231,7 +237,7 @@ def test_default_name(mock_tools, android_sdk, tmp_path):
     # it only checks that the emulator is created with the default name.
 
     # User provides no input; default name will be used
-    mock_tools.input.return_value = ""
+    mock_tools.console.values = [""]
 
     # Mock the initial output of an AVD config file.
     avd_config_path = tmp_path / "home/.android/avd/beePhone.avd/config.ini"
@@ -260,7 +266,7 @@ def test_default_name_with_collisions(mock_tools, android_sdk, tmp_path):
         ]
     )
     # User provides no input; default name will be used
-    mock_tools.input.return_value = ""
+    mock_tools.console.values = [""]
 
     # Mock the initial output of an AVD config file.
     avd_config_path = tmp_path / "home/.android/avd/beePhone3.avd/config.ini"

@@ -3,14 +3,13 @@ import os
 import platform
 import sys
 import time
-from os.path import normpath
 from pathlib import Path
 from unittest import mock
 
+import httpx
 import pytest
-import requests
 
-from briefcase.console import Console, Log
+from briefcase.console import Console
 from briefcase.exceptions import BriefcaseCommandError
 from briefcase.integrations.android_sdk import ADB, AndroidSDK
 from briefcase.integrations.java import JDK
@@ -33,7 +32,6 @@ def jdk():
 @pytest.fixture
 def run_command(tmp_path, first_app_config, jdk):
     command = GradleRunCommand(
-        logger=Log(),
         console=Console(),
         base_path=tmp_path / "base_path",
         data_path=tmp_path / "briefcase",
@@ -50,7 +48,7 @@ def run_command(tmp_path, first_app_config, jdk):
 
     command.tools.os = mock.MagicMock(spec_set=os)
     command.tools.os.environ = {}
-    command.tools.requests = mock.MagicMock(spec_set=requests)
+    command.tools.httpx = mock.MagicMock(spec_set=httpx)
     command.tools.subprocess = mock.MagicMock(spec_set=Subprocess)
     command.tools.sys = mock.MagicMock(spec_set=sys)
 
@@ -89,6 +87,7 @@ def test_device_option(run_command):
         "update_requirements": False,
         "update_resources": False,
         "update_support": False,
+        "update_stub": False,
         "no_update": False,
         "test_mode": False,
         "passthrough": [],
@@ -111,6 +110,7 @@ def test_extra_emulator_args_option(run_command):
         "update_requirements": False,
         "update_resources": False,
         "update_support": False,
+        "update_stub": False,
         "no_update": False,
         "test_mode": False,
         "passthrough": [],
@@ -131,6 +131,7 @@ def test_shutdown_on_exit_option(run_command):
         "update_requirements": False,
         "update_resources": False,
         "update_support": False,
+        "update_stub": False,
         "no_update": False,
         "test_mode": False,
         "passthrough": [],
@@ -219,7 +220,7 @@ def test_run_existing_device(run_command, first_app_config):
 
     run_command.tools.mock_adb.pidof.assert_called_once_with(
         f"{first_app_config.package_name}.{first_app_config.module_name}",
-        quiet=True,
+        quiet=2,
     )
     run_command.tools.mock_adb.logcat.assert_called_once_with(pid="777")
 
@@ -291,7 +292,7 @@ def test_run_with_passthrough(run_command, first_app_config):
 
     run_command.tools.mock_adb.pidof.assert_called_once_with(
         f"{first_app_config.package_name}.{first_app_config.module_name}",
-        quiet=True,
+        quiet=2,
     )
     run_command.tools.mock_adb.logcat.assert_called_once_with(pid="777")
 
@@ -332,7 +333,7 @@ def test_run_slow_start(run_command, first_app_config, monkeypatch):
 
     assert (
         run_command.tools.mock_adb.pidof.mock_calls
-        == [mock.call("com.example.first_app", quiet=True)] * 3
+        == [mock.call("com.example.first_app", quiet=2)] * 3
     )
     assert time.sleep.mock_calls == [mock.call(0.01)] * 2
     run_command.tools.mock_adb.logcat.assert_called_once_with(pid="888")
@@ -386,7 +387,7 @@ def test_run_crash_at_start(run_command, first_app_config, monkeypatch):
 
     assert (
         run_command.tools.mock_adb.pidof.mock_calls
-        == [mock.call("com.example.first_app", quiet=True)] * 5
+        == [mock.call("com.example.first_app", quiet=2)] * 5
     )
     assert time.sleep.mock_calls == [mock.call(0.01)] * 5
 
@@ -542,14 +543,15 @@ def test_log_file_extra(run_command, monkeypatch):
     run_command.tools.subprocess.check_output.assert_not_called()
 
     # list_packages() is called when saving the log
-    run_command.tools.logger.save_log = True
-    run_command.tools.logger.save_log_to_file(run_command)
+    run_command.tools.console.save_log = True
+    run_command.tools.console.save_log_to_file(run_command)
 
-    sdk_manager = f"/path/to/android_sdk/cmdline-tools/{AndroidSDK.SDK_MANAGER_VER}/bin/sdkmanager"
-    if platform.system() == "Windows":
-        sdk_manager += ".bat"
+    sdk_manager = Path(
+        f"/path/to/android_sdk/cmdline-tools/{AndroidSDK.SDK_MANAGER_VER}"
+        f"/bin/sdkmanager{'.bat' if platform.system() == 'Windows' else ''}"
+    )
     run_command.tools.subprocess.check_output.assert_called_once_with(
-        [normpath(sdk_manager), "--list_installed"],
+        [sdk_manager, "--list_installed"],
         env={
             "ANDROID_HOME": str(run_command.tools.android_sdk.root_path),
             "ANDROID_SDK_ROOT": str(run_command.tools.android_sdk.root_path),
@@ -613,7 +615,7 @@ def test_run_test_mode(run_command, first_app_config):
 
     run_command.tools.mock_adb.pidof.assert_called_once_with(
         f"{first_app_config.package_name}.{first_app_config.module_name}",
-        quiet=True,
+        quiet=2,
     )
     run_command.tools.mock_adb.logcat.assert_called_once_with(pid="777")
 
@@ -686,7 +688,7 @@ def test_run_test_mode_with_passthrough(run_command, first_app_config):
 
     run_command.tools.mock_adb.pidof.assert_called_once_with(
         f"{first_app_config.package_name}.{first_app_config.module_name}",
-        quiet=True,
+        quiet=2,
     )
     run_command.tools.mock_adb.logcat.assert_called_once_with(pid="777")
 

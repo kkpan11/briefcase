@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import logging
-import operator
 import os
 import platform
 import re
+import shutil
 import sys
+import textwrap
 import time
 import traceback
+from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
 from datetime import datetime
 from enum import IntEnum
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Any, Callable
 
 from rich.console import Console as RichConsole
 from rich.control import strip_control_codes
@@ -28,6 +30,10 @@ from rich.progress import (
 from rich.traceback import Trace, Traceback
 
 from briefcase import __version__
+from briefcase.exceptions import InputDisabled
+
+# Max width for printing to console; matches argparse's default width
+MAX_TEXT_WIDTH = max(min(shutil.get_terminal_size().columns, 80) - 2, 20)
 
 # Regex to identify settings likely to contain sensitive information
 SENSITIVE_SETTING_RE = re.compile(r"API|TOKEN|KEY|SECRET|PASS|SIGNATURE", flags=re.I)
@@ -35,13 +41,6 @@ SENSITIVE_SETTING_RE = re.compile(r"API|TOKEN|KEY|SECRET|PASS|SIGNATURE", flags=
 # 7-bit C1 ANSI escape sequences
 ANSI_ESC_SEQ_RE_DEF = r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])"
 ANSI_ESCAPE_RE = re.compile(ANSI_ESC_SEQ_RE_DEF)
-
-
-class InputDisabled(Exception):
-    def __init__(self):
-        super().__init__(
-            "Input is disabled; cannot request user input without a default"
-        )
 
 
 def sanitize_text(text: str) -> str:
@@ -73,19 +72,82 @@ class RichConsoleHighlighter(RegexHighlighter):
     ]
 
 
-class Printer:
-    def __init__(self, log_width=180):
+class RichLoggingStream:
+    """Stream for logging.StreamHandler that prints to console via debug logging."""
+
+    def __init__(self, console: Console):
+        self.console = console
+
+    def write(self, msg: str) -> None:
+        self.console.debug(msg)
+
+
+class RichLoggingHandler(logging.StreamHandler):
+    """A debug handler for third party tools using stdlib logging."""
+
+    def __init__(self, stream: RichLoggingStream):
+        super().__init__(stream=stream)
+        self.setLevel(logging.DEBUG)
+        self.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+
+
+class LogLevel(IntEnum):
+    INFO = 0
+    VERBOSE = 1
+    DEBUG = 2
+    DEEP_DEBUG = 3
+
+
+class NotDeadYet:
+    # I’m getting better! No you’re not, you’ll be stone dead in a minute.
+
+    def __init__(self, console: Console):
+        """A keep-alive spinner for long-running processes without console output.
+
+        Returned by the Wait Bar's context manager but can be used independently. Use in
+        a loop that calls update() each iteration. A keep-alive message will be printed
+        every 10 seconds.
+        """
+        self.console = console
+        self.interval_sec: int = 10
+        self.message: str = "... still waiting"
+        self.ready_time: float = 0.0
+
+        self.reset()  # initialize
+
+    def update(self):
+        """Write keep-alive message if the periodic interval has elapsed."""
+        if self.ready_time < time.time():
+            self.console.print(self.message)
+            self.reset()
+
+    def reset(self):
+        """Initialize periodic interval to now; next message prints after interval."""
+        self.ready_time = time.time() + self.interval_sec
+
+
+class Console:
+    # subdirectory of command.base_path to store log files
+    LOG_DIR = "logs"
+
+    def __init__(
+        self,
+        input_enabled: bool = True,
+        verbosity: LogLevel = LogLevel.INFO,
+        log_width: int = 180,
+    ):
         """Interface for printing and managing output to the console and/or log.
 
-        The default width is wide enough to render the output of ``sdkmanager
-        --list_installed`` in the log file without line wrapping.
-
-        :param log_width: The width at which content should be wrapped in the log file
+        :param input_enabled: Is the console current enabled for input?
+        :param verbosity: Controls how much output is displayed to the user.
+        :param log_width: The width at which content should be wrapped in the log file.
+            The default width is wide enough to render the output of ``sdkmanager
+            --list_installed`` in the log file without line wrapping.
         """
         self.log_width = log_width
 
         # A wrapper around the console
-        self.console = RichConsole(
+        self._console_impl = RichConsole(
             highlighter=RichConsoleHighlighter(),
             emoji=False,
             soft_wrap=True,
@@ -94,9 +156,9 @@ class Printer:
         # Rich only records what's being logged if it is actually written somewhere;
         # writing to /dev/null allows Rich to do so without needing to print the
         # logs in the console or save them to file before it is known a file is wanted.
-        self.dev_null = open(os.devnull, "w", encoding="utf-8", errors="ignore")
-        self.log = RichConsole(
-            file=self.dev_null,
+        self._dev_null = open(os.devnull, "w", encoding="utf-8", errors="ignore")
+        self._log_impl = RichConsole(
+            file=self._dev_null,
             record=True,
             width=self.log_width,
             force_interactive=False,
@@ -109,10 +171,43 @@ class Printer:
             soft_wrap=True,
         )
 
-    def __del__(self):
-        self.dev_null.close()
+        ##################################################################
+        # Logging properties
+        ##################################################################
 
-    def __call__(self, *messages, stack_offset=5, show=True, **kwargs):
+        # --verbosity flag: see LogLevel for valid values
+        self.verbosity = verbosity
+        # --log flag to force logfile creation
+        self.save_log = False
+        # flag set by exceptions to skip writing the log; save_log takes precedence.
+        self.skip_log = False
+        # Rich stacktraces of exceptions for logging to file.
+        # A list of tuples containing a label for the thread context, and the Trace object
+        self.stacktraces: list[tuple[str, Trace]] = []
+        # functions to run for additional logging if creating a logfile
+        self.log_file_extras: list[Callable[[], object]] = []
+        # The current context for the log
+        self._context = ""
+
+        ##################################################################
+        # Console management properties
+        ##################################################################
+        self.input_enabled = input_enabled
+
+        self._wait_bar: Progress | None = None
+        # Signal that Rich is dynamically controlling the console output. Therefore,
+        # all output must be printed to the screen by Rich to prevent corruption of
+        # dynamic elements like the Wait Bar.
+        self.is_console_controlled = False
+
+    def __del__(self):
+        self._dev_null.close()
+
+    #################################################################
+    # Console primitives
+    #################################################################
+
+    def print(self, *messages, stack_offset=5, show=True, **kwargs):
         """Entry point for all printing to the console and the log.
 
         The log records all content that is printed whether it is shown in the console
@@ -132,71 +227,21 @@ class Printer:
 
     def to_console(self, *messages, **kwargs):
         """Write only to the console and skip writing to the log."""
-        self.console.print(*messages, **kwargs)
+        self._console_impl.print(*messages, **kwargs)
 
     def to_log(self, *messages, stack_offset=5, **kwargs):
         """Write only to the log and skip writing to the console."""
-        self.log.log(
+        self._log_impl.log(
             *map(sanitize_text, messages), _stack_offset=stack_offset, **kwargs
         )
 
     def export_log(self):
         """Export the text of the entire log; the log is also cleared."""
-        return self.log.export_text()
+        return self._log_impl.export_text()
 
-
-class RichLoggingStream:
-    """Stream for logging.StreamHandler that prints to console via debug logging."""
-
-    def __init__(self, logger: Log):
-        self.logger = logger
-
-    def write(self, msg: str) -> None:
-        self.logger.debug(msg)
-
-
-class RichLoggingHandler(logging.StreamHandler):
-    """A debug handler for third party tools using stdlib logging."""
-
-    def __init__(self, stream: RichLoggingStream):
-        super().__init__(stream=stream)
-        self.setLevel(logging.DEBUG)
-        self.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
-
-
-class LogLevel(IntEnum):
-    INFO = 0
-    VERBOSE = 1
-    DEBUG = 2
-    DEEP_DEBUG = 3
-
-
-class Log:
-    """Manage logging output driven by verbosity flags."""
-
-    # subdirectory of command.base_path to store log files
-    LOG_DIR = "logs"
-
-    def __init__(
-        self,
-        printer: Printer | None = None,
-        verbosity: LogLevel = LogLevel.INFO,
-    ):
-        self.print = Printer() if printer is None else printer
-        # --verbosity flag: see LogLevel for valid values
-        self.verbosity = verbosity
-        # --log flag to force logfile creation
-        self.save_log = False
-        # flag set by exceptions to skip writing the log; save_log takes precedence.
-        self.skip_log = False
-        # Rich stacktraces of exceptions for logging to file.
-        # A list of tuples containing a label for the thread context, and the Trace object
-        self.stacktraces: list[tuple[str, Trace]] = []
-        # functions to run for additional logging if creating a logfile
-        self.log_file_extras: list[Callable[[], object]] = []
-        # The current context for the log
-        self._context = ""
-
+    #################################################################
+    # Logging controls
+    #################################################################
     @contextmanager
     def context(self, context: str):
         """Wrap a collection of output in a logging context.
@@ -347,7 +392,9 @@ class Log:
 
         # do not add another rich handler if one already exists
         if not any(isinstance(h, RichLoggingHandler) for h in logger.handlers):
-            logger.addHandler(RichLoggingHandler(stream=RichLoggingStream(logger=self)))
+            logger.addHandler(
+                RichLoggingHandler(stream=RichLoggingStream(console=self))
+            )
             logger.setLevel(logging.DEBUG)
 
     def capture_stacktrace(self, label="Main thread"):
@@ -368,7 +415,7 @@ class Log:
         """Register a function to be called in the event that a log file is written.
 
         This can be used to provide additional debugging information which is too
-        expensive to gather pre-emptively.
+        expensive to gather preemptively.
         """
         self.log_file_extras.append(func)
 
@@ -382,8 +429,8 @@ class Log:
         ):
             return
 
-        with command.input.wait_bar("Saving log...", transient=True):
-            self.print.to_console()
+        with command.console.wait_bar("Saving log...", transient=True):
+            self.to_console()
             log_filename = f"briefcase.{datetime.now().strftime('%Y_%m_%d-%H_%M_%S')}.{command.command}.log"
             log_filepath = command.base_path / self.LOG_DIR / log_filename
             try:
@@ -396,27 +443,28 @@ class Log:
                 self.error(f"Failed to save log to {log_filepath}: {e}")
             else:
                 self.warning(f"Log saved to {log_filepath}")
-            self.print.to_console()
+            self.to_console()
 
-    def _build_log(self, command):
+    def _build_log(self, command) -> str:
         """Accumulate all information to include in the log file."""
-        # add the exception stacktrace to end of log if one was captured
+        # Add the exception stacktraces to end of log if any were captured
         if self.stacktraces:
-            # using print.log.print() instead of print.to_log() to avoid
+            # using print() instead of to_log() to avoid
             # timestamp and code location inclusion for the stacktrace box.
             for thread, stacktrace in self.stacktraces:
-                self.print.log.print(
+                self._log_impl.print(
                     f"{thread} traceback:",
                     Traceback(
                         trace=stacktrace,
-                        width=self.print.log_width,
+                        width=self.log_width,
                         show_locals=True,
                     ),
                     new_line_start=True,
                 )
 
+        # Retrieve additional logging added by the Command
         if self.log_file_extras:
-            with command.input.wait_bar(
+            with self.wait_bar(
                 "Collecting extra information for log...",
                 transient=True,
             ):
@@ -428,21 +476,30 @@ class Log:
                     except Exception:
                         self.error(traceback.format_exc())
 
-        # build log header and export buffered log from Rich
-        uname = platform.uname()
+        # Capture env vars removing any potentially sensitive information
         sanitized_env_vars = "\n".join(
             f"\t{env_var}={value if not SENSITIVE_SETTING_RE.search(env_var) else '********************'}"
             for env_var, value in sorted(command.tools.os.environ.items())
         )
+
+        # Capture pyproject.toml if one exists in the current directory
+        try:
+            with open(Path.cwd() / "pyproject.toml", encoding="utf-8") as f:
+                pyproject_toml = f.read().strip()
+        except OSError as e:
+            pyproject_toml = str(e)
+
+        # Build log with buffered log from Rich
+        uname = platform.uname()
         return (
             f"Date/Time:       {datetime.now().strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
             f"Command line:    {' '.join(sys.argv)}\n"
-            f"\n"
+            "\n"
             f"OS Release:      {uname.system} {uname.release}\n"
             f"OS Version:      {uname.version}\n"
             f"Architecture:    {uname.machine}\n"
             f"Platform:        {platform.platform(aliased=True)}\n"
-            f"\n"
+            "\n"
             f"Python exe:      {sys.executable}\n"
             # replace line breaks with spaces (use chr(10) since '\n' isn't allowed in f-strings...)
             f"Python version:  {sys.version.replace(chr(10), ' ')}\n"
@@ -452,58 +509,24 @@ class Log:
             f"Virtual env:     {hasattr(sys, 'real_prefix') or sys.base_prefix != sys.prefix}\n"
             # for conda, prefix and base_prefix are likely the same but contain a conda-meta dir.
             f"Conda env:       {(Path(sys.prefix) / 'conda-meta').exists()}\n"
-            f"\n"
+            "\n"
             f"Briefcase:       {__version__}\n"
             f"Target platform: {command.platform}\n"
             f"Target format:   {command.output_format}\n"
-            f"\n"
-            f"Environment Variables:\n"
+            "\n"
+            "Environment Variables:\n"
             f"{sanitized_env_vars}\n"
-            f"\n"
-            f"Briefcase Log:\n"
-            f"{self.print.export_log()}"
+            "\n"
+            "pyproject.toml:\n"
+            f"{pyproject_toml}\n"
+            "\n"
+            "Briefcase Log:\n"
+            f"{self.export_log()}"
         )
 
-
-class NotDeadYet:
-    # I’m getting better! No you’re not, you’ll be stone dead in a minute.
-
-    def __init__(self, printer: Printer):
-        """A keep-alive spinner for long-running processes without console output.
-
-        Returned by the Wait Bar's context manager but can be used independently. Use in
-        a loop that calls update() each iteration. A keep-alive message will be printed
-        every 10 seconds.
-        """
-        self.printer: Printer = printer
-        self.interval_sec: int = 10
-        self.message: str = "... still waiting"
-        self.ready_time: float = 0.0
-
-        self.reset()  # initialize
-
-    def update(self):
-        """Write keep-alive message if the periodic interval has elapsed."""
-        if self.ready_time < time.time():
-            self.printer(self.message)
-            self.reset()
-
-    def reset(self):
-        """Initialize periodic interval to now; next message prints after interval."""
-        self.ready_time = time.time() + self.interval_sec
-
-
-class Console:
-    def __init__(self, printer: Printer | None = None, enabled: bool = True):
-        self.enabled = enabled
-        self.print = Printer() if printer is None else printer
-        # Use Rich's input() to read from user
-        self.input = self.print.console.input
-        self._wait_bar: Progress | None = None
-        # Signal that Rich is dynamically controlling the console output. Therefore,
-        # all output must be printed to the screen by Rich to prevent corruption of
-        # dynamic elements like the Wait Bar.
-        self.is_console_controlled = False
+    #################################################################
+    # Console controls
+    #################################################################
 
     @property
     def is_interactive(self):
@@ -518,7 +541,7 @@ class Console:
         should be specifically disabled in non-interactive sessions.
         """
         # `sys.__stdout__` is used because Rich captures and redirects `sys.stdout`
-        return sys.__stdout__.isatty()
+        return os.isatty(sys.__stdout__.fileno())
 
     @property
     def is_color_enabled(self):
@@ -529,10 +552,10 @@ class Console:
         the terminal is influenced by attributes of the platform as well as FORCE_COLOR.
         """
         # no_color has precedence since color_system can be set even if color is disabled
-        if self.print.console.no_color:
+        if self._console_impl.no_color:
             return False
         else:
-            return self.print.console.color_system is not None
+            return self._console_impl.color_system is not None
 
     def progress_bar(self):
         """Returns a progress bar as a context manager."""
@@ -544,7 +567,7 @@ class Console:
             TextColumn("•", style="default"),
             TimeRemainingColumn(compact=True, elapsed_when_finished=True),
             disable=not self.is_interactive,
-            console=self.print.console,
+            console=self._console_impl,
         )
 
     @contextmanager
@@ -580,7 +603,7 @@ class Console:
                 TextColumn("{task.fields[message]}"),
                 transient=True,
                 disable=is_wait_bar_disabled,
-                console=self.print.console,
+                console=self._console_impl,
             )
             # start=False causes the progress bar to "pulse"
             # message=None is a sentinel the Wait Bar should be inactive
@@ -597,7 +620,7 @@ class Console:
 
         try:
             self._wait_bar.start()
-            yield NotDeadYet(printer=self.print)
+            yield NotDeadYet(console=self)
         except BaseException as e:
             # capture BaseException so message is left on the screen even if user sends CTRL+C
             error_message = "aborted" if isinstance(e, KeyboardInterrupt) else "errored"
@@ -643,16 +666,60 @@ class Console:
             if is_wait_bar_running:
                 self._wait_bar.start()
 
+    #################################################################
+    # Basic User Input/Output controls
+    #################################################################
+
+    def textwrap(self, text: str, width: int = MAX_TEXT_WIDTH) -> str:
+        """Wrap text to the console width, a default max width, or a specified width."""
+        # textwrap isn't really designed to format text that already contains newlines.
+        # So, instead, break the text by newlines and format each line individually.
+        return "\n".join(
+            "\n".join(textwrap.wrap(line, width)) for line in text.splitlines()
+        )
+
     def prompt(self, *values, markup=False, **kwargs):
         """Print to the screen for soliciting user interaction if input enabled.
 
         :param values: strings to print as the user prompt
         :param markup: True if prompt contains Rich markup
         """
-        if self.enabled:
+        if self.input_enabled:
             self.print(*values, markup=markup, stack_offset=4, **kwargs)
 
-    def boolean_input(self, question: str, default: bool = False) -> bool:
+    def divider(self, title: str = ""):
+        """Writes a divider with an optional title.
+
+        :param title: Optional; the title to display in the divider.
+        """
+        title = f"-- {title} " if title else ""
+        self.prompt()
+        self.prompt()
+        self.prompt(f"{title}{'-' * (MAX_TEXT_WIDTH - len(title))}", style="bold")
+
+    def input(self, prompt: str, *, markup: bool = False):
+        """A simple input() interface, consistent with the Python builtin input().
+
+        Prompt should be bold if markup is included.
+        """
+        if not self.input_enabled:
+            raise InputDisabled()
+
+        # make the prompt *bold* if it doesn't already contain markup
+        escaped_prompt = f"[bold]{escape(prompt)}[/bold]" if not markup else prompt
+
+        try:
+            # Use underlying Rich input() to read from user
+            input_value = self._console_impl.input(escaped_prompt, markup=True)
+        except EOFError:
+            raise KeyboardInterrupt
+
+        self.to_log(prompt)
+        self.to_log(f"User input: {input_value}")
+
+        return input_value
+
+    def input_boolean(self, question: str, default: bool = False) -> bool:
         """Get a boolean input from user, in the form of y/n.
 
         The user might press "y" for true or "n" for false. If input is disabled,
@@ -676,7 +743,7 @@ class Console:
 
         prompt = f"{question} {yes_no}? "
 
-        result = self.selection_input(
+        result = self.input_selection(
             prompt=prompt,
             choices=["y", "n"],
             default=default_text,
@@ -688,7 +755,7 @@ class Console:
 
         return False
 
-    def selection_input(
+    def input_selection(
         self,
         prompt: str,
         choices: Iterable[str],
@@ -706,7 +773,7 @@ class Console:
             performing any validity checks.
         """
         while True:
-            result = self.text_input(prompt, default)
+            result = self.input_text(prompt, default)
 
             if transform is not None and result is not None:
                 result = transform(result)
@@ -714,10 +781,11 @@ class Console:
             if result in choices:
                 return result
 
-            self.prompt()
-            self.prompt(error_message)
+            self.warning()
+            self.warning(error_message)
+            self.warning()
 
-    def text_input(self, prompt: str, default: str | None = None) -> str:
+    def input_text(self, prompt: str, default: str | None = None) -> str:
         """Prompt the user for text input.
 
         If no default is specified, the input will be returned as entered.
@@ -730,7 +798,7 @@ class Console:
         :returns: The content entered by the user.
         """
         try:
-            user_input = self(prompt)
+            user_input = self.input(prompt)
             if default is not None and user_input == "":
                 return default
         except InputDisabled:
@@ -740,59 +808,155 @@ class Console:
 
         return user_input
 
-    def __call__(self, prompt: str, *, markup: bool = False):
-        """Present input() interface; prompt should be bold if markup is included."""
-        if not self.enabled:
-            raise InputDisabled()
+    #################################################################
+    # Advanced User Input/Output controls
+    #################################################################
 
-        # make the prompt *bold* if it doesn't already contain markup
-        escaped_prompt = f"[bold]{escape(prompt)}[/bold]" if not markup else prompt
+    def _validate(self, value, validator, usage="Invalid value") -> bool:
+        """Validate a user-provided value.
 
+        A warning message is printed if input is enabled. Otherwise, an exception is
+        raised.
+
+        :param value: The candidate value.
+        :param validator: A validator function (or None, for no validation); accepts a
+            single input (the candidate response), returns True if the value is valid,
+            or raises ValueError() with a debugging message if the candidate value isn't
+            valid.
+        :raises InputDisabled: if console input has been disabled.
+        :returns: True if the value is valid
+        """
         try:
-            input_value = self.input(escaped_prompt, markup=True)
-        except EOFError:
-            raise KeyboardInterrupt
+            if validator is None or validator(value):
+                return True
+            else:
+                error_msg = repr(value)
+        except ValueError as e:
+            error_msg = str(e)
 
-        self.print.to_log(prompt)
-        self.print.to_log(f"User input: {input_value}")
+        if not self.input_enabled:
+            raise InputDisabled(error_msg)
 
-        return input_value
+        self.prompt()
+        self.prompt(f"{usage}: {error_msg}", style="bold yellow")
 
+        return False
 
-def select_option(options, input, prompt="> ", error="Invalid selection", default=None):
-    """Prompt the user for a choice from a list of options.
+    def text_question(
+        self,
+        description,
+        intro,
+        default,
+        validator=None,
+        override_value=None,
+    ) -> str:
+        """Ask the user a question whose answer is text.
 
-    The options are provided as a dictionary; the values are the human-readable options,
-    and the keys are the values that will be returned as the selection. The human-
-    readable options will be sorted before display to the user.
+        :param description: A short description of the question being asked. This text
+            is used in prompts and a header bar prefacing the question.
+        :param intro: An introductory paragraph explaining the question being asked.
+        :param default: The default value if the user hits enter without typing anything.
+        :param validator: (optional) A validator function; accepts a single input (the
+            candidate response), returns True if the answer is valid, or raises
+            ValueError() with a debugging message if the candidate value isn't valid.
+        :param override_value: A pre-selected answer for the question. This can be used
+            to shortcut asking the question, such as when a command line option provides
+            a value. If provided and valid, the header bar will be displayed, but the
+            intro paragraph and option list will not.
+        :returns: a string, guaranteed to meet the validation criteria of ``validator``
+        """
+        self.divider(title=description)
 
-    This method does *not* print a question or any leading text; it only prints the list
-    of options, and prompts the user for their choice. If the user chooses an invalid
-    selection (either provides non-integer input, or an invalid integer), it prints an
-    error message and prompts the user again.
+        if override_value is not None:
+            self.print()
+            self.print(f"Using override value {override_value!r}")
+            if self._validate(
+                override_value,
+                validator,
+                usage=f"Invalid override value for {description}",
+            ):
+                return override_value
 
-    :param options: A dictionary, or list of tuples, of options to present to the user.
-    :param input: The function to use to retrieve the user's input. This exists so that
-        the user's input can be easily mocked during testing.
-    :param prompt: The prompt to display to the user.
-    :param error: The error message to display when the user provides invalid input.
-    :param default: The default option for empty user input. The options for the user
-        start numbering at 1; so, to default to the first item, this should be "1".
-    :returns: The key corresponding to the user's chosen option.
-    """
-    if isinstance(options, dict):
-        ordered = list(sorted(options.items(), key=operator.itemgetter(1)))
-    else:
-        ordered = options
+        self.prompt()
+        self.prompt(self.textwrap(intro))
+        self.prompt()
+        while True:
+            answer = self.input_text(f"{description} [{default}]: ", default=default)
 
-    if input.enabled:
+            if self._validate(answer, validator):
+                return answer
+
+            self.prompt()
+
+    def selection_question(
+        self,
+        description: str,
+        intro: str,
+        options: Iterable[str] | Mapping[Any, str],
+        default: str | None = None,
+        override_value: str | None = None,
+    ) -> Any:
+        """Ask the user a question whose answer requires selecting from a list of
+        options.
+
+        The options are provided as a dictionary, or as a list of items. If a dictionary
+        is provided, the values are the human-readable options, and the keys are the
+        values that will be returned as the selection. The human-readable options will
+        be sorted before display to the user. If a list is provided, the values in the
+        list are both the user-displayed values and the returned value.
+
+        :param description: A short description of the question being asked. This text
+            is used in prompts and a header bar prefacing the question.
+        :param intro: An introductory paragraph explaining the question being asked.
+        :param options: The options to present to the user.
+        :param default: The default option for empty user input. The options for the
+            user start numbering at 1; so, to default to the first item, this should be
+            "1".
+        :param override_value: A pre-selected answer for the question. This can be used
+            to shortcut asking the question, such as when a command line option provides
+            a value. If provided and valid, the header bar will be displayed, but the
+            intro paragraph and option list will not.
+        :returns: The user's chosen option (the key of that option if options were
+            provided as a dictionary)
+        """
+        self.divider(title=description)
+
+        if override_value is not None:
+            self.print()
+            self.print(f"Using override value {override_value!r}")
+            if self._validate(
+                override_value,
+                validator=lambda c: c in options,
+                usage=f"Invalid override value for {description}",
+            ):
+                return override_value
+
+        self.prompt()
+        self.prompt(self.textwrap(intro))
+        self.prompt()
+
+        if isinstance(options, dict):
+            ordered = list(options.items())
+        else:
+            ordered = list(zip(options, options))
+
+        if default is not None:
+            try:
+                default = str([option[0] for option in ordered].index(default) + 1)
+            except ValueError:
+                raise ValueError(f"{default!r} is not a valid default value")
+
         for i, (key, value) in enumerate(ordered, start=1):
-            input.prompt(f"  {i}) {value}")
+            self.prompt(f"  {i}) {value}")
 
-        input.prompt()
+        self.prompt()
 
-    choices = [str(index) for index in range(1, len(ordered) + 1)]
-    index = input.selection_input(
-        prompt=prompt, choices=choices, error_message=error, default=default
-    )
-    return ordered[int(index) - 1][0]
+        choices = [str(index) for index in range(1, len(ordered) + 1)]
+        index = self.input_selection(
+            prompt=f"{description} [{default}]: " if default else f"{description}: ",
+            choices=choices,
+            error_message="Invalid Selection",
+            default=default,
+        )
+
+        return ordered[int(index) - 1][0]

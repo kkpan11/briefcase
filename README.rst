@@ -1,33 +1,37 @@
-.. image:: https://beeware.org/project/projects/tools/briefcase/briefcase.png
+.. |logo| image:: https://beeware.org/project/briefcase/briefcase.png
    :width: 72px
    :target: https://beeware.org/briefcase
+
+.. |pyversions| image:: https://img.shields.io/pypi/pyversions/briefcase.svg
+   :target: https://pypi.python.org/pypi/briefcase
+   :alt: Python Versions
+
+.. |version| image:: https://img.shields.io/pypi/v/briefcase.svg
+   :target: https://pypi.python.org/pypi/briefcase
+   :alt: PyPI Version
+
+.. |maturity| image:: https://img.shields.io/pypi/status/briefcase.svg
+   :target: https://pypi.python.org/pypi/briefcase
+   :alt: Maturity
+
+.. |license| image:: https://img.shields.io/pypi/l/briefcase.svg
+   :target: https://github.com/beeware/briefcase/blob/main/LICENSE
+   :alt: BSD License
+
+.. |ci| image:: https://github.com/beeware/briefcase/workflows/CI/badge.svg?branch=main
+   :target: https://github.com/beeware/briefcase/actions
+   :alt: Build Status
+
+.. |social| image:: https://img.shields.io/discord/836455665257021440?label=Discord%20Chat&logo=discord&style=plastic
+   :target: https://beeware.org/bee/chat/
+   :alt: Discord server
+
+|logo|
 
 Briefcase
 =========
 
-.. image:: https://img.shields.io/pypi/pyversions/briefcase.svg
-   :target: https://pypi.python.org/pypi/briefcase
-   :alt: Python Versions
-
-.. image:: https://img.shields.io/pypi/v/briefcase.svg
-   :target: https://pypi.python.org/pypi/briefcase
-   :alt: PyPI Version
-
-.. image:: https://img.shields.io/pypi/status/briefcase.svg
-   :target: https://pypi.python.org/pypi/briefcase
-   :alt: Maturity
-
-.. image:: https://img.shields.io/pypi/l/briefcase.svg
-   :target: https://github.com/beeware/briefcase/blob/main/LICENSE
-   :alt: BSD License
-
-.. image:: https://github.com/beeware/briefcase/workflows/CI/badge.svg?branch=main
-   :target: https://github.com/beeware/briefcase/actions
-   :alt: Build Status
-
-.. image:: https://img.shields.io/discord/836455665257021440?label=Discord%20Chat&logo=discord&style=plastic
-   :target: https://beeware.org/bee/chat/
-   :alt: Discord server
+|pyversions| |version| |maturity| |license| |ci| |social|
 
 Briefcase is a tool for converting a Python project into a standalone native
 application. You can package projects for:
@@ -51,6 +55,22 @@ To install Briefcase, run::
 If you would like a full introduction to using Briefcase, try the `BeeWare tutorial
 <https://docs.beeware.org>`__. This tutorial walks you through the process of creating
 and packaging a new application with Briefcase.
+
+Financial support
+-----------------
+
+The BeeWare project would not be possible without the generous support of our financial
+members:
+
+.. image:: https://beeware.org/community/members/anaconda/anaconda-large.png
+    :target: https://anaconda.com/
+    :alt: Anaconda logo
+
+Anaconda Inc. - Advancing AI through open source.
+
+Plus individual contributions from `users like you
+<https://beeware.org/community/members/>`__. If you find Briefcase, or other BeeWare
+tools useful, please consider becoming a financial member.
 
 Documentation
 -------------

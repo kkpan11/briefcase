@@ -1,4 +1,3 @@
-import os
 import subprocess
 from datetime import datetime
 from unittest.mock import MagicMock, PropertyMock
@@ -13,7 +12,7 @@ def test_logcat_tail(mock_tools, adb, is_color_enabled, monkeypatch):
     """Invoking `logcat_tail()` calls `run()` with the appropriate parameters."""
     # Mock whether color is enabled for the console
     monkeypatch.setattr(
-        type(mock_tools.input),
+        type(mock_tools.console),
         "is_color_enabled",
         PropertyMock(return_value=is_color_enabled),
     )
@@ -24,7 +23,7 @@ def test_logcat_tail(mock_tools, adb, is_color_enabled, monkeypatch):
     # Validate call parameters.
     mock_tools.subprocess.run.assert_called_once_with(
         [
-            os.fsdecode(mock_tools.android_sdk.adb_path),
+            mock_tools.android_sdk.adb_path,
             "-s",
             "exampleDevice",
             "logcat",

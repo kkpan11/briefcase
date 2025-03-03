@@ -7,7 +7,7 @@ from unittest import mock
 
 import pytest
 
-from briefcase.console import Console, Log
+from briefcase.console import Console
 from briefcase.exceptions import BriefcaseCommandError
 from briefcase.platforms.linux import system
 from briefcase.platforms.linux.system import LinuxSystemPackageCommand
@@ -18,7 +18,6 @@ from ....utils import create_file, create_tgz_file
 @pytest.fixture
 def package_command(first_app, tmp_path):
     command = LinuxSystemPackageCommand(
-        logger=Log(),
         console=Console(),
         base_path=tmp_path / "base_path",
         data_path=tmp_path / "briefcase",
@@ -453,7 +452,6 @@ def test_rpm_package_extra_requirements(package_command, first_app_rpm, tmp_path
     # Add system requirements and other optional settings.
     first_app_rpm.system_runtime_requires = ["first", "second"]
     first_app_rpm.revision = 42
-    first_app_rpm.license = "BSD License"
 
     # Package the app
     package_command.package_app(first_app_rpm)
@@ -486,7 +484,7 @@ def test_rpm_package_extra_requirements(package_command, first_app_rpm, tmp_path
                 "Release:        42%{?dist}",
                 "Summary:        The first simple app \\ demonstration",
                 "",
-                "License:        BSD License",
+                "License:        Unknown",
                 "URL:            https://example.com/first-app",
                 "Source0:        %{name}-%{version}.tar.gz",
                 "",

@@ -1,6 +1,7 @@
+from __future__ import annotations
+
 import os
 import subprocess
-from typing import List
 
 from briefcase.commands import (
     BuildCommand,
@@ -35,6 +36,7 @@ class LinuxAppImagePassiveMixin(LinuxMixin):
     supported_host_os_reason = (
         "Linux AppImages can only be built on Linux, or on macOS using Docker."
     )
+    platform_target_version = "0.3.20"
 
     def appdir_path(self, app):
         return self.bundle_path(app) / f"{app.formal_name}.AppDir"
@@ -91,7 +93,7 @@ class LinuxAppImagePassiveMixin(LinuxMixin):
     def finalize_app_config(self, app: AppConfig):
         """If we're *not* using Docker, warn the user about portability."""
         if not self.use_docker:
-            self.logger.warning(
+            self.console.warning(
                 """\
 *************************************************************************
 ** WARNING: Building a Local AppImage!                                 **
@@ -105,7 +107,7 @@ class LinuxAppImagePassiveMixin(LinuxMixin):
 """
             )
 
-        self.logger.warning(
+        self.console.warning(
             """\
 *************************************************************************
 ** WARNING: Use of AppImage is not recommended!                        **
@@ -193,7 +195,7 @@ class LinuxAppImageCreateCommand(
             }[LinuxDeploy.arch(self.tools)]
         except KeyError:
             manylinux_arch = LinuxDeploy.arch(self.tools)
-            self.logger.warning(
+            self.console.warning(
                 f"There is no manylinux base image for {manylinux_arch}"
             )
 
@@ -224,7 +226,7 @@ class LinuxAppImageCreateCommand(
         # On Windows, the support path is co-mingled with app content.
         # This means updating the support package is imperfect.
         # Warn the user that there could be problems.
-        self.logger.warning(
+        self.console.warning(
             """
 *************************************************************************
 ** WARNING: Support package update may be imperfect                    **
@@ -265,14 +267,14 @@ class LinuxAppImageBuildCommand(LinuxAppImageMixin, BuildCommand):
         # Build a dictionary of environment definitions that are required
         env = {}
 
-        self.logger.info("Checking for Linuxdeploy plugins...", prefix=app.app_name)
+        self.console.info("Checking for Linuxdeploy plugins...", prefix=app.app_name)
         try:
             plugins = self.tools.linuxdeploy.verify_plugins(
                 app.linuxdeploy_plugins,
                 bundle_path=self.bundle_path(app),
             )
 
-            self.logger.info("Configuring Linuxdeploy plugins...", prefix=app.app_name)
+            self.console.info("Configuring Linuxdeploy plugins...", prefix=app.app_name)
             # We need to add the location of the linuxdeploy plugins to the PATH.
             # However, if we are running inside Docker, we need to know the
             # environment *inside* the Docker container.
@@ -289,11 +291,11 @@ class LinuxAppImageBuildCommand(LinuxAppImageMixin, BuildCommand):
                 + [base_path]
             )
         except AttributeError:
-            self.logger.info("No linuxdeploy plugins configured.")
+            self.console.info("No linuxdeploy plugins configured.")
             plugins = {}
 
-        self.logger.info("Building AppImage...", prefix=app.app_name)
-        with self.input.wait_bar("Building..."):
+        self.console.info("Building AppImage...", prefix=app.app_name)
+        with self.console.wait_bar("Building..."):
             try:
                 # For some reason, the version has to be passed in as an
                 # environment variable, *not* in the configuration.
@@ -314,7 +316,7 @@ class LinuxAppImageBuildCommand(LinuxAppImageMixin, BuildCommand):
                 env["ARCH"] = self.tools.host_arch
 
                 # Enable debug logging for linuxdeploy GTK and Qt plugins
-                if self.logger.is_deep_debug:
+                if self.console.is_deep_debug:
                     env["DEBUG"] = "1"
 
                 # Find all the .so files in app and app_packages,
@@ -338,14 +340,12 @@ class LinuxAppImageBuildCommand(LinuxAppImageMixin, BuildCommand):
                         self.tools.linuxdeploy.file_path
                         / self.tools.linuxdeploy.file_name,
                         "--appdir",
-                        os.fsdecode(self.appdir_path(app)),
+                        self.appdir_path(app),
                         "--desktop-file",
-                        os.fsdecode(
-                            self.appdir_path(app) / f"{app.bundle_identifier}.desktop"
-                        ),
+                        self.appdir_path(app) / f"{app.bundle_identifier}.desktop",
                         "--output",
                         "appimage",
-                        "-v0" if self.logger.is_deep_debug else "-v1",
+                        "-v0" if self.console.is_deep_debug else "-v1",
                     ]
                     + additional_args,
                     env=env,
@@ -370,7 +370,7 @@ class LinuxAppImageRunCommand(LinuxAppImagePassiveMixin, RunCommand):
         self,
         app: AppConfig,
         test_mode: bool,
-        passthrough: List[str],
+        passthrough: list[str],
         **kwargs,
     ):
         """Start the application.
@@ -380,25 +380,38 @@ class LinuxAppImageRunCommand(LinuxAppImagePassiveMixin, RunCommand):
         :param passthrough: The list of arguments to pass to the app
         """
         # Set up the log stream
-        kwargs = self._prepare_app_env(app=app, test_mode=test_mode)
+        kwargs = self._prepare_app_kwargs(app=app, test_mode=test_mode)
 
-        # Start the app in a way that lets us stream the logs
-        app_popen = self.tools.subprocess.Popen(
-            [os.fsdecode(self.binary_path(app))] + passthrough,
-            cwd=self.tools.home_path,
-            **kwargs,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            bufsize=1,
-        )
+        # Console apps must operate in non-streaming mode so that console input can
+        # be handled correctly. However, if we're in test mode, we *must* stream so
+        # that we can see the test exit sentinel
+        if app.console_app and not test_mode:
+            self.console.info("=" * 75)
+            self.tools.subprocess.run(
+                [self.binary_path(app)] + passthrough,
+                cwd=self.tools.home_path,
+                bufsize=1,
+                stream_output=False,
+                **kwargs,
+            )
+        else:
+            # Start the app in a way that lets us stream the logs
+            app_popen = self.tools.subprocess.Popen(
+                [self.binary_path(app)] + passthrough,
+                cwd=self.tools.home_path,
+                **kwargs,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+            )
 
-        # Start streaming logs for the app.
-        self._stream_app_logs(
-            app,
-            popen=app_popen,
-            test_mode=test_mode,
-            clean_output=False,
-        )
+            # Start streaming logs for the app.
+            self._stream_app_logs(
+                app,
+                popen=app_popen,
+                test_mode=test_mode,
+                clean_output=False,
+            )
 
 
 class LinuxAppImagePackageCommand(LinuxAppImageMixin, PackageCommand):

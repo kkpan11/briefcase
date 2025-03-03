@@ -124,7 +124,7 @@ class GradleMixin:
                 "--console",
                 "plain",
             ]
-            + (["--debug"] if self.tools.logger.is_deep_debug else [])
+            + (["--debug"] if self.tools.console.is_deep_debug else [])
             + args,
             env=self.tools.android_sdk.env,
             # Set working directory so gradle can use the app bundle path as its
@@ -145,7 +145,7 @@ class GradleMixin:
         super().verify_tools()
         AndroidSDK.verify(tools=self.tools)
         if not self.is_clone:
-            self.logger.add_log_file_extra(self.tools.android_sdk.list_packages)
+            self.console.add_log_file_extra(self.tools.android_sdk.list_packages)
 
 
 class GradleCreateCommand(GradleMixin, CreateCommand):
@@ -181,7 +181,7 @@ class GradleCreateCommand(GradleMixin, CreateCommand):
         try:
             dependencies = app.build_gradle_dependencies
         except AttributeError:
-            self.logger.warning(
+            self.console.warning(
                 """
 *************************************************************************
 ** WARNING: App does not define build_gradle_dependencies              **
@@ -200,7 +200,7 @@ class GradleCreateCommand(GradleMixin, CreateCommand):
     You should add this definition to the Android configuration
     of your project's pyproject.toml file. See:
 
-        https://briefcase.readthedocs.io/en/stable/reference/platforms/android.html#build_gradle-dependencies
+        https://briefcase.readthedocs.io/en/stable/reference/platforms/android/gradle.html#build-gradle-dependencies
 
     for more information.
 
@@ -298,7 +298,7 @@ class GradleBuildCommand(GradleMixin, BuildCommand):
         return self.bundle_path(app) / self.path_index(app, "metadata_resource_path")
 
     def update_app_metadata(self, app: AppConfig, test_mode: bool):
-        with self.input.wait_bar("Setting main module..."):
+        with self.console.wait_bar("Setting main module..."):
             with self.metadata_resource_path(app).open("w", encoding="utf-8") as f:
                 # Set the name of the app's main module; this will depend
                 # on whether we're in test mode.
@@ -316,11 +316,11 @@ class GradleBuildCommand(GradleMixin, BuildCommand):
         :param app: The application to build
         :param test_mode: Should the app be updated in test mode? (default: False)
         """
-        self.logger.info("Updating app metadata...", prefix=app.app_name)
+        self.console.info("Updating app metadata...", prefix=app.app_name)
         self.update_app_metadata(app=app, test_mode=test_mode)
 
-        self.logger.info("Building Android APK...", prefix=app.app_name)
-        with self.input.wait_bar("Building..."):
+        self.console.info("Building Android APK...", prefix=app.app_name)
+        with self.console.wait_bar("Building..."):
             try:
                 self.run_gradle(app, ["assembleDebug"])
             except subprocess.CalledProcessError as e:
@@ -399,7 +399,7 @@ class GradleRunCommand(GradleMixin, RunCommand):
                 extra = f" (with {' '.join(extra_emulator_args)})"
             else:
                 extra = ""
-            self.logger.info(f"Starting emulator {avd}{extra}...", prefix=app.app_name)
+            self.console.info(f"Starting emulator {avd}{extra}...", prefix=app.app_name)
             device, name = self.tools.android_sdk.start_emulator(
                 avd, extra_emulator_args
             )
@@ -407,7 +407,7 @@ class GradleRunCommand(GradleMixin, RunCommand):
         try:
             label = "test suite" if test_mode else "app"
 
-            self.logger.info(
+            self.console.info(
                 f"Starting {label} on {name} (device ID {device})", prefix=app.app_name
             )
 
@@ -419,16 +419,16 @@ class GradleRunCommand(GradleMixin, RunCommand):
             package = f"{app.package_name}.{app.module_name}"
 
             # We force-stop the app to ensure the activity launches freshly.
-            self.logger.info("Installing app...", prefix=app.app_name)
-            with self.input.wait_bar("Stopping old versions of the app..."):
+            self.console.info("Installing app...", prefix=app.app_name)
+            with self.console.wait_bar("Stopping old versions of the app..."):
                 adb.force_stop_app(package)
 
             # Install the latest APK file onto the device.
-            with self.input.wait_bar("Installing new app version..."):
+            with self.console.wait_bar("Installing new app version..."):
                 adb.install_apk(self.binary_path(app))
 
             # To start the app, we launch `org.beeware.android.MainActivity`.
-            with self.input.wait_bar(f"Launching {label}..."):
+            with self.console.wait_bar(f"Launching {label}..."):
                 # capture the earliest time for device logging in case PID not found
                 device_start_time = adb.datetime()
 
@@ -440,12 +440,12 @@ class GradleRunCommand(GradleMixin, RunCommand):
                 while not pid and datetime.datetime.now() < fail_time:
                     # Try to get the PID; run in quiet mode because we may
                     # need to do this a lot in the next 5 seconds.
-                    pid = adb.pidof(package, quiet=True)
+                    pid = adb.pidof(package, quiet=2)
                     if not pid:
                         time.sleep(0.01)
 
             if pid:
-                self.logger.info(
+                self.console.info(
                     "Following device log output (type CTRL-C to stop log)...",
                     prefix=app.app_name,
                 )
@@ -460,13 +460,13 @@ class GradleRunCommand(GradleMixin, RunCommand):
                     clean_filter=android_log_clean_filter,
                     clean_output=False,
                     # Check for the PID in quiet mode so logs aren't corrupted.
-                    stop_func=lambda: not adb.pid_exists(pid=pid, quiet=True),
+                    stop_func=lambda: not adb.pid_exists(pid=pid, quiet=2),
                     log_stream=True,
                 )
             else:
-                self.logger.error("Unable to find PID for app", prefix=app.app_name)
-                self.logger.error("Logs for launch attempt follow...")
-                self.logger.error("=" * 75)
+                self.console.error("Unable to find PID for app", prefix=app.app_name)
+                self.console.error("Logs for launch attempt follow...")
+                self.console.error("=" * 75)
 
                 # Show the log from the start time of the app
                 adb.logcat_tail(since=device_start_time)
@@ -474,7 +474,7 @@ class GradleRunCommand(GradleMixin, RunCommand):
                 raise BriefcaseCommandError(f"Problem starting app {app.app_name!r}")
         finally:
             if shutdown_on_exit:
-                with self.tools.input.wait_bar("Stopping emulator..."):
+                with self.tools.console.wait_bar("Stopping emulator..."):
                     adb.kill()
 
 
@@ -488,11 +488,11 @@ class GradlePackageCommand(GradleMixin, PackageCommand):
 
         :param app: The application to build
         """
-        self.logger.info(
+        self.console.info(
             "Building Android App Bundle and APK in release mode...",
             prefix=app.app_name,
         )
-        with self.input.wait_bar("Bundling..."):
+        with self.console.wait_bar("Bundling..."):
             build_type, build_artefact_path = {
                 "aab": ("bundleRelease", "bundle/release/app-release.aab"),
                 "apk": ("assembleRelease", "apk/release/app-release-unsigned.apk"),
