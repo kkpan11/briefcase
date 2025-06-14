@@ -82,9 +82,86 @@ class macOSMixin:
     # 0.3.20 introduced a framework-based support package.
     platform_target_version = "0.3.20"
 
+    def is_icloud_synced(self, path: Path) -> bool:
+        """Determine if a path is on an iCloud drive.
+
+        This is done by looking for the "com.apple.fileprovider.fpfs#P" resource fork.
+        This fork only appears on *some* directories - most notably, `.app` folders.
+
+        :param path: The location to check.
+        :returns: True if the location has iCloud resource markers.
+        """
+        # Check if the path is on an iCloud mounted drive.
+        try:
+            # Check for the iCloud resource fork. "Good" operation produces an error,
+            # so use quiet mode.
+            self.tools.subprocess.check_output(
+                [
+                    "xattr",
+                    "-p",
+                    "com.apple.fileprovider.fpfs#P",
+                    path,
+                ],
+                quiet=1,
+            )
+            # The resource fork was found.
+            return True
+        except subprocess.CalledProcessError:
+            # The resource fork was not found.
+            # This includes the file not existing.
+            return False
+
+    def verify_not_on_icloud(self, app: AppConfig, cleanup=False):
+        """Confirm that the app is *not* on an iCloud synchronized drive.
+
+        When a `.app` folder is on an iCloud-synchronized drive, iCloud adds filesystem
+        metadata to the folder. This metadata can't be removed (iCloud will just put it
+        back again), but it also conflicts with app signing. So - if we detect this
+        metadata, the project has been generated somewhere that ultimately won't work.
+
+        Optionally, this method will clean up the bundle if the verification fails.
+
+        :param app: The app to check.
+        :param cleanup: Should the app bundle be deleted if verification fails?
+        """
+        if self.is_icloud_synced(self.binary_path(app)):
+            msg = [
+                """\
+Your project is in a folder that is synchronized with iCloud. This interferes
+with the operation of macOS code signing."""
+            ]
+            if cleanup:
+                self.tools.shutil.rmtree(self.bundle_path(app))
+                msg.append(
+                    f"""
+Move your project to a location that is not synchronized with iCloud,
+and re-run `briefcase {self.command}`."""
+                )
+            else:
+                bundle_path = self.bundle_path(app).relative_to(self.base_path)
+                msg.append(
+                    f"""
+Delete the {bundle_path} folder, move your project to location
+that is not synchronized with iCloud, and re-run `briefcase {self.command}`."""
+                )
+            raise BriefcaseCommandError("\n".join(msg))
+
 
 class macOSCreateMixin(AppPackagesMergeMixin):
     hidden_app_properties = {"permission", "entitlement"}
+
+    def generate_app_template(self, app: AppConfig):
+        """Create an application bundle.
+
+        :param app: The config object for the app
+        """
+        super().generate_app_template(app=app)
+        # If we discover we're on iCloud during app creation, we can clean up the app
+        # folder. This *may* return a false negative (i.e., not accurately detect that
+        # we *are* on iCloud, because it takes a moment for the iCloud daemon to detect
+        # that a new folder has been created; however, if this occurs, it will be
+        # picked up on the next run of any Briefcase command).
+        self.verify_not_on_icloud(app, cleanup=True)
 
     def _install_app_requirements(
         self,
@@ -301,14 +378,12 @@ class macOSRunMixin:
     def run_app(
         self,
         app: AppConfig,
-        test_mode: bool,
         passthrough: list[str],
         **kwargs,
     ):
         """Start the application.
 
         :param app: The config object for the app
-        :param test_mode: Boolean; Is the app running in test mode?
         :param passthrough: The list of arguments to pass to the app
         """
         # Console apps must operate in non-streaming mode so that console input can
@@ -317,14 +392,12 @@ class macOSRunMixin:
         if app.console_app:
             self.run_console_app(
                 app,
-                test_mode=test_mode,
                 passthrough=passthrough,
                 **kwargs,
             )
         else:
             self.run_gui_app(
                 app,
-                test_mode=test_mode,
                 passthrough=passthrough,
                 **kwargs,
             )
@@ -332,21 +405,19 @@ class macOSRunMixin:
     def run_console_app(
         self,
         app: AppConfig,
-        test_mode: bool,
         passthrough: list[str],
         **kwargs,
     ):
         """Start the console application.
 
         :param app: The config object for the app
-        :param test_mode: Boolean; Is the app running in test mode?
         :param passthrough: The list of arguments to pass to the app
         """
-        sub_kwargs = self._prepare_app_kwargs(app=app, test_mode=test_mode)
+        sub_kwargs = self._prepare_app_kwargs(app=app)
         cmdline = [self.binary_path(app) / f"Contents/MacOS/{app.formal_name}"]
         cmdline.extend(passthrough)
 
-        if test_mode:
+        if app.test_mode:
             # Stream the app's output for testing.
             # When a console app runs normally, its stdout should be connected
             # directly to the terminal to properly display the app. When its test
@@ -360,7 +431,7 @@ class macOSRunMixin:
                 bufsize=1,
                 **sub_kwargs,
             )
-            self._stream_app_logs(app, popen=app_popen, test_mode=test_mode)
+            self._stream_app_logs(app, popen=app_popen)
 
         else:
             try:
@@ -381,14 +452,12 @@ class macOSRunMixin:
     def run_gui_app(
         self,
         app: AppConfig,
-        test_mode: bool,
         passthrough: list[str],
         **kwargs,
     ):
         """Start the GUI application.
 
         :param app: The config object for the app
-        :param test_mode: Boolean; Is the app running in test mode?
         :param passthrough: The list of arguments to pass to the app
         """
         # Start log stream for the app.
@@ -430,7 +499,7 @@ class macOSRunMixin:
         app_pid = None
         try:
             # Set up the log stream
-            sub_kwargs = self._prepare_app_kwargs(app=app, test_mode=test_mode)
+            sub_kwargs = self._prepare_app_kwargs(app=app)
 
             # Start the app in a way that lets us stream the logs
             self.tools.subprocess.run(
@@ -457,7 +526,6 @@ class macOSRunMixin:
             self._stream_app_logs(
                 app,
                 popen=log_popen,
-                test_mode=test_mode,
                 clean_filter=macOS_log_clean_filter,
                 clean_output=True,
                 stop_func=lambda: is_process_dead(app_pid),
@@ -660,6 +728,7 @@ or
                 )
                 return
             else:
+                self.tools.subprocess.output_error(e)
                 raise BriefcaseCommandError(f"Unable to code sign {path}.")
 
     def sign_app(
@@ -1227,6 +1296,9 @@ password:
             installer. Ignored unless the packaging format is ``pkg``.
         :param submission_id: The submission ID of the notarization task to resume.
         """
+        # Confirm the project isn't currently on an iCloud synced drive.
+        self.verify_not_on_icloud(app)
+
         if submission_id:
             # If we're resuming notarization, we *can't* use an adhoc identity,
             # so don't allow it to be selected.
