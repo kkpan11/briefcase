@@ -26,6 +26,8 @@ def create_command(tmp_path, first_app_templated):
 
     # mock subprocess app context for this app
     command.tools[first_app_templated].app_context = mock.MagicMock(spec_set=Subprocess)
+    command.generate_template = mock.MagicMock()
+    command.verify_not_on_icloud = mock.MagicMock()
 
     return command
 
@@ -294,6 +296,22 @@ def test_permissions_context(
     assert context == create_command.permissions_context(first_app, x_permissions)
 
 
+def test_generate_app_template(create_command, first_app, tmp_path):
+    """After the app is generated, the location is checked for iCloud markers."""
+    create_command.generate_app_template(first_app)
+
+    # The template was generated. Check some basic details, but not the full context.
+    create_command.generate_template.assert_called_once_with(
+        template="https://github.com/beeware/briefcase-macOS-app-template.git",
+        branch=None,
+        output_path=tmp_path / "base_path/build/first-app/macos",
+        extra_context=mock.ANY,
+    )
+
+    # iCloud was verified, with cleanup.
+    create_command.verify_not_on_icloud.assert_called_once_with(first_app, cleanup=True)
+
+
 def test_install_app_resources(create_command, first_app_templated, tmp_path):
     """The app bundle's modification time is updated when app resources are
     installed."""
@@ -351,7 +369,7 @@ def test_install_app_packages(
     # Mock the merge command so we can confirm it was invoked.
     create_command.merge_app_packages = mock.Mock()
 
-    create_command.install_app_requirements(first_app_templated, test_mode=False)
+    create_command.install_app_requirements(first_app_templated)
 
     # We looked for binary packages in the host app_packages
     create_command.find_binary_packages.assert_called_once_with(
@@ -463,7 +481,7 @@ def test_min_os_version(create_command, first_app_templated, tmp_path):
     # Mock the merge command so we can confirm it was invoked.
     create_command.merge_app_packages = mock.Mock()
 
-    create_command.install_app_requirements(first_app_templated, test_mode=False)
+    create_command.install_app_requirements(first_app_templated)
 
     # We looked for binary packages in the host app_packages
     create_command.find_binary_packages.assert_called_once_with(
@@ -564,7 +582,7 @@ def test_invalid_min_os_version(create_command, first_app_templated):
             r"but the support package only supports 10.12"
         ),
     ):
-        create_command.install_app_requirements(first_app_templated, test_mode=False)
+        create_command.install_app_requirements(first_app_templated)
 
     # No request was made to install requirements
     create_command.tools[first_app_templated].app_context.run.assert_not_called()
@@ -602,7 +620,7 @@ def test_install_app_packages_no_binary(
     # Mock the merge command so we can confirm it was invoked.
     create_command.merge_app_packages = mock.Mock()
 
-    create_command.install_app_requirements(first_app_templated, test_mode=False)
+    create_command.install_app_requirements(first_app_templated)
 
     # We looked for binary packages in the host app_packages
     create_command.find_binary_packages.assert_called_once_with(
@@ -702,7 +720,7 @@ def test_install_app_packages_failure(create_command, first_app_templated, tmp_p
             r"to the PyPI server.\n"
         ),
     ):
-        create_command.install_app_requirements(first_app_templated, test_mode=False)
+        create_command.install_app_requirements(first_app_templated)
 
     # We looked for binary packages in the host app_packages
     create_command.find_binary_packages.assert_called_once_with(
@@ -806,7 +824,7 @@ def test_install_app_packages_non_universal(
     # Mock the merge command so we can confirm it wasn't invoked.
     create_command.merge_app_packages = mock.Mock()
 
-    create_command.install_app_requirements(first_app_templated, test_mode=False)
+    create_command.install_app_requirements(first_app_templated)
 
     # We didn't search for binary packages
     create_command.find_binary_packages.assert_not_called()

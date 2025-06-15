@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 
 from briefcase.config import AppConfig
@@ -33,9 +35,11 @@ def test_minimal_AppConfig():
     assert config.icon is None
 
     # The PYTHONPATH is derived correctly
-    assert config.PYTHONPATH(False) == ["src", "somewhere/else", ""]
+    config.test_mode = False
+    assert config.PYTHONPATH() == ["src", "somewhere/else", ""]
     # The test mode PYTHONPATH is the same
-    assert config.PYTHONPATH(True) == ["src", "somewhere/else", ""]
+    config.test_mode = True
+    assert config.PYTHONPATH() == ["src", "somewhere/else", ""]
 
     # The object has a meaningful REPL
     assert repr(config) == "<org.beeware.myapp v1.2.3 AppConfig>"
@@ -60,6 +64,7 @@ def test_extra_attrs():
                 "extension": "doc",
                 "description": "A document",
                 "url": "https://testurl.com",
+                "mime_type": "application/x-my-doc-type",
             }
         },
         first="value 1",
@@ -78,14 +83,36 @@ def test_extra_attrs():
     # Properties that are derived by default have been set explicitly
     assert config.formal_name == "My App!"
     assert config.class_name == "MyApp"
-    assert config.document_types == {
-        "document": {
-            "icon": "icon",
-            "extension": "doc",
-            "description": "A document",
-            "url": "https://testurl.com",
+
+    if sys.platform == "darwin":
+        assert config.document_types == {
+            "document": {
+                "icon": "icon",
+                "extension": "doc",
+                "description": "A document",
+                "url": "https://testurl.com",
+                "mime_type": "application/x-my-doc-type",
+                "macOS": {
+                    "CFBundleTypeRole": "Viewer",
+                    "LSHandlerRank": "Owner",
+                    "UTTypeConformsTo": [
+                        "public.data",
+                        "public.content",
+                    ],
+                    "is_core_type": False,
+                },
+            }
         }
-    }
+    else:
+        assert config.document_types == {
+            "document": {
+                "icon": "icon",
+                "extension": "doc",
+                "description": "A document",
+                "url": "https://testurl.com",
+                "mime_type": "application/x-my-doc-type",
+            }
+        }
 
     # Explicit additional properties have been set
     assert config.first == "value 1"
